@@ -41,9 +41,19 @@ uint64_t audio_now_us(void)
            (uint64_t)clock() * 1000000ULL / CLOCKS_PER_SEC;
 }
 
-mr_audio *audio_open(unsigned rate, int channels, int bits)
+mr_audio *audio_open(mr_audio_output out, unsigned rate, int channels,
+                     int bits)
 {
+    if (out >= MR_AUDIO_OUT_AHI0 &&
+        out < MR_AUDIO_OUT_AHI0 + MR_AUDIO_OUT_AHI_UNITS)
+        return ahi_audio_open((int)(out - MR_AUDIO_OUT_AHI0), rate, channels,
+                              bits);
     return paula_audio_open(rate, channels, bits);
+}
+
+const char *audio_name(mr_audio *a)
+{
+    return a ? a->ops->name(a) : "no audio";
 }
 
 void audio_close(mr_audio *a)

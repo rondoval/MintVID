@@ -12,6 +12,7 @@
 #include "mr_audio.h"
 
 typedef struct mr_audio_ops {
+    const char   *(*name)(mr_audio *a);
     void          (*close)(mr_audio *a);
     void          (*write)(mr_audio *a, const unsigned char *pcm, unsigned bytes);
     void          (*write_s16)(mr_audio *a, const short *pcm,
@@ -39,5 +40,6 @@ extern int audio_want_time;
 uint64_t audio_now_us(void);
 
 mr_audio *paula_audio_open(unsigned rate, int channels, int bits);
+mr_audio *ahi_audio_open(int unit, unsigned rate, int channels, int bits);
 
 #endif /* MR_AUDIO_BACKEND_H */

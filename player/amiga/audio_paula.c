@@ -835,7 +835,14 @@ static int paula_starved(mr_audio *base)
     return starved;
 }
 
+static const char *paula_name(mr_audio *base)
+{
+    (void)base;
+    return "Paula stereo pair";
+}
+
 static const mr_audio_ops paula_ops = {
+    paula_name,
     paula_close,
     paula_write,
     paula_write_s16,
