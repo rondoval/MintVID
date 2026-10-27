@@ -109,8 +109,7 @@ static int get_packet(hwdec *h, mr_hwdec_packet *out)
             h->failed = 1;
             return 0;
         }
-        h->ops->wait(h->be, WAIT_STEP_MS);
-        waited += WAIT_STEP_MS;
+        waited += h->ops->wait(h->be, WAIT_STEP_MS);
     }
 }
 
@@ -267,8 +266,7 @@ mr_status mr_hwdec_flush(mr_decoder *dec)
         pump(h);
         if (h->ready_count) return hand_out(dec, h);
         if (h->ended || h->failed || idle >= DRAIN_IDLE_MS) return MR_EAGAIN;
-        h->ops->wait(h->be, WAIT_STEP_MS);
-        idle += WAIT_STEP_MS;
+        idle += h->ops->wait(h->be, WAIT_STEP_MS);
     }
 }
 

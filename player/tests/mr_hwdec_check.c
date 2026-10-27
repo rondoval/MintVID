@@ -188,7 +188,8 @@ static mr_status fk_flush(void *be)
     return MR_OK;
 }
 
-static void fk_wait(void *be, unsigned ms) { (void)be; fk.waited_ms += ms; }
+static unsigned fk_wait(void *be, unsigned ms)
+{ (void)be; fk.waited_ms += ms; return ms; }
 
 static mr_status fk_set_output(void *be, mr_pixfmt fmt, int w, int h)
 {

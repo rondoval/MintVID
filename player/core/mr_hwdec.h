@@ -76,8 +76,9 @@ typedef struct mr_hwdec_ops {
     /* Drop everything in flight: input buffers come back through poll(),
      * no picture from before it comes out after it. */
     mr_status (*flush)(void *backend);
-    /* Sleep until the backend has something for poll(), or ms pass. */
-    void      (*wait)(void *backend, unsigned ms);
+    /* Sleep until the backend has something for poll(), or ms pass; how
+     * long it slept (the backend's signal can end it early). */
+    unsigned  (*wait)(void *backend, unsigned ms);
     mr_status (*set_output)(void *backend, mr_pixfmt fmt, int w, int h);
     void      (*close)(void *backend);
 } mr_hwdec_ops;
