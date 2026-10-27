@@ -100,6 +100,10 @@ typedef struct {
                                   int *dst_w, int *dst_h, int *vscale,
                                   int *indexed_depth, int *ham);
     int   (*supports_yuv422)(void *handle);
+    /* Optional: the size a src_w x src_h picture is shown at (*w x *h), so a
+     * decoder that scales can deliver frames that size and the backend only
+     * copies their rows. 0 when the backend cannot say. */
+    int   (*present_size)(void *handle, int src_w, int src_h, int *w, int *h);
 } display_backend;
 
 extern const display_backend backend_cgx;

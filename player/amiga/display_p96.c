@@ -940,6 +940,24 @@ static void p96_show_bgr(void *h, const unsigned char *bgr, int w, int hh,
                     service, service_opaque);
 }
 
+/* p96_rebuild_geometry()'s rule: 1:1 when the picture fits the screen,
+ * otherwise fitted down. A frame that size takes the row-copy path. */
+static int p96_present_size(void *h, int src_w, int src_h, int *w, int *hh)
+{
+    p96_state *s = (p96_state *)h;
+    mr_aspect_rect fit;
+    if (!s || src_w <= 0 || src_h <= 0) return 0;
+    if (src_w <= s->iw && src_h <= s->ih) {
+        *w = src_w;
+        *hh = src_h;
+        return 1;
+    }
+    fit = mr_aspect_fit(src_w, src_h, s->iw, s->ih);
+    *w = fit.w;
+    *hh = fit.h;
+    return 1;
+}
+
 static int p96_supports_rgb565(void *h)
 {
     p96_state *s = (p96_state *)h;
@@ -1122,7 +1140,8 @@ const display_backend backend_p96 = {
     .close = p96_close,
     .status = p96_status,
     .wait_mask = p96_wait_mask,
-    .toggle_fullscreen = p96_toggle_fullscreen
+    .toggle_fullscreen = p96_toggle_fullscreen,
+    .present_size = p96_present_size
     /* supports_indexed/show_indexed/supports_yuv_indexed left NULL - RTG
      * backends don't implement the AGA-only indexed fast paths. */
 };

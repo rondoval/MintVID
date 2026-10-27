@@ -422,6 +422,13 @@ int display_supports_yuv_indexed(amiga_display *d, int src_w, int src_h,
                                        vscale, indexed_depth, ham);
 }
 
+int display_present_size(amiga_display *d, int src_w, int src_h,
+                         int *w, int *h)
+{
+    return d && d->be->present_size &&
+           d->be->present_size(d->h, src_w, src_h, w, h);
+}
+
 int display_rtg_frame_timing(amiga_display *d, mr_display_timing *timing)
 {
     return d && d->be->timing ? d->be->timing(d->h, timing) : 0;

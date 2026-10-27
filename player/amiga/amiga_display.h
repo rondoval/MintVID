@@ -216,6 +216,13 @@ int display_supports_bgr24(amiga_display *d);
 void display_show_bgr24(amiga_display *d, const unsigned char *bgr,
                         int w, int h, int stride, int dy0, int dy1);
 
+/* The size a src_w x src_h picture is shown at, when the backend can say
+ * (the P96 private screen: 1:1 if it fits, else fitted down). A decoder that
+ * scales can deliver frames that size; the backend then copies rows only.
+ * Returns 0 when unknown. */
+int display_present_size(amiga_display *d, int src_w, int src_h,
+                         int *w, int *h);
+
 /* Native RGB565 path (one native uint16_t per pixel, stride in bytes - see
  * core/mr_yuv.h's mr_yuv420_to_rgb565()). display_supports_rgb565() is true
  * when the active backend writes it to a 16-bit screen with a row copy (P96
