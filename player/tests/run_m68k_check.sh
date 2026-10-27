@@ -492,6 +492,10 @@ echo "== building mr_media_clock_check.m68k =="
 $CC -o "$BUILD/mr_media_clock_check.m68k" tests/mr_media_clock_check.c \
     core/mr_media_clock.c
 
+echo "== building mr_avc_check.m68k (H.264 Annex-B setup, SPS parsing) =="
+$CC -o "$BUILD/mr_avc_check.m68k" tests/mr_avc_check.c core/mr_avc.c \
+    core/mr_mov.c core/mr_rawvideo.c core/mr_mkv.c core/mr_ts.c core/mr_latm.c
+
 echo "== building mr_micro_rescue_check.m68k =="
 $CC -o "$BUILD/mr_micro_rescue_check.m68k" tests/mr_micro_rescue_check.c
 
@@ -538,6 +542,16 @@ run "$BUILD/mr_mpeg1_blockset_check.m68k"
 run "$BUILD/mr_mpeg1_idct_check.m68k"
 run "$BUILD/mr_media_clock_check.m68k"
 run "$BUILD/mr_micro_rescue_check.m68k"
+run "$BUILD/mr_avc_check.m68k"
+mkdir -p tests/assets/ref_annexb
+for f in test_h264_high.mp4 test_h264_gop.mp4 test_h264_aac.mkv; do
+    test -f "tests/assets/ref_annexb/$f.h264" ||
+        ffmpeg -v error -i "tests/assets/$f" -c:v copy -bsf:v h264_mp4toannexb \
+            -f h264 -y "tests/assets/ref_annexb/$f.h264"
+    run "$BUILD/mr_avc_check.m68k" "tests/assets/$f" \
+        "tests/assets/ref_annexb/$f.h264"
+done
+run "$BUILD/mr_avc_check.m68k" tests/assets/test_h264_aac.ts -
 
 echo "[AC-3 vs ffmpeg, real m68k/big-endian]"
 run "$BUILD/mr_ac3_check.m68k" tests/assets/test_ac3.ac3 \
