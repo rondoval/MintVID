@@ -4118,6 +4118,10 @@ int main(int argc, char **argv)
             /* Reopened demuxers do not inherit the TS service hook. */
             mr_demux_set_service(dx, service_player_during_io, &trace);
             mr_demux_set_timing_enabled(dx, want_time);
+            /* The decoder's config (avcC) belonged to the demuxer closed
+             * above: reopen it from the new one's. */
+            dec.config = vi->config;
+            dec.config_len = vi->config_len;
             if (mr_decoder_reset(&dec) != MR_OK ||
                 !apply_h264_speed(&dec, h264_speed, 0)) break;
             /* mr_decoder_reset() closes and reopens the codec, so a fresh
