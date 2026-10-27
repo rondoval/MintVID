@@ -354,6 +354,11 @@ mr_codec_registry_check: tests/mr_codec_registry_check.c core/mr_codec.c \
                          core/mr_h263.c core/mr_yuv.c core/mr_rle.c
 	$(CC) $(CFLAGS) -o $@ $^
 
+# The registry as the Amiga player builds it with a hardware decoder, against
+# fake descriptors (the real one is Amiga-only).
+mr_codec_fallback_check: tests/mr_codec_fallback_check.c core/mr_codec.c
+	$(CC) $(CFLAGS) -DMR_HAVE_VIDEOCORE -o $@ $^
+
 mr_rawvideo_check: tests/mr_rawvideo_check.c core/mr_rawvideo.c
 	$(CC) $(CFLAGS) -o $@ $^
 
@@ -442,13 +447,14 @@ mr_youtube_search_check: tests/mr_youtube_search_check.c \
 	$(CC) $(CFLAGS) -o $@ tests/mr_youtube_search_check.c \
 	    youtube/mr_youtube_search.c
 
-check: check-amissl-lifecycle check-hls-worker-lifecycle mr_decode mr_codec_registry_check mr_scale_check mr_yuv_check mr_rgb565_check mr_c2p_check mr_ham_check mr_dither_check mr_yuv_dither_check mr_yuv_planar_queue_check mr_yuv_ham_check mr_mpeg1_probe_check mr_mpeg1_timing_check mr_mpeg1_audio_time_check mr_mpeg2_yuv_check mr_mpeg2_mc_check mr_mpeg2_idct_check mr_mpeg2_bskip_check mr_h264_smoosh_check mr_ps_check mr_ps_pts_check mr_ts_mp2_check mr_ts_video_pes_check mr_mkv_check mr_mov_seek_check mr_legacy_video_check mr_cinepak_indexed_check mr_msvideo1_indexed_check mr_rawvideo_check mr_pcm_u8_check mr_audio_rate_check mr_aspect_check mr_media_clock_check mr_micro_rescue_check mr_muldiv64_check mr_ih264_divmod_check mr_h264_m68k_check mr_h264_mc_degrade_check mr_iptv_check mr_youtube_check mr_youtube_search_check mr_hls_override_check mr_source_buffer_check
+check: check-amissl-lifecycle check-hls-worker-lifecycle mr_decode mr_codec_registry_check mr_codec_fallback_check mr_scale_check mr_yuv_check mr_rgb565_check mr_c2p_check mr_ham_check mr_dither_check mr_yuv_dither_check mr_yuv_planar_queue_check mr_yuv_ham_check mr_mpeg1_probe_check mr_mpeg1_timing_check mr_mpeg1_audio_time_check mr_mpeg2_yuv_check mr_mpeg2_mc_check mr_mpeg2_idct_check mr_mpeg2_bskip_check mr_h264_smoosh_check mr_ps_check mr_ps_pts_check mr_ts_mp2_check mr_ts_video_pes_check mr_mkv_check mr_mov_seek_check mr_legacy_video_check mr_cinepak_indexed_check mr_msvideo1_indexed_check mr_rawvideo_check mr_pcm_u8_check mr_audio_rate_check mr_aspect_check mr_media_clock_check mr_micro_rescue_check mr_muldiv64_check mr_ih264_divmod_check mr_h264_m68k_check mr_h264_mc_degrade_check mr_iptv_check mr_youtube_check mr_youtube_search_check mr_hls_override_check mr_source_buffer_check
 	./mr_source_buffer_check
 	./mr_youtube_search_check
 	./mr_youtube_check
 	./mr_hls_override_check
 	./mr_iptv_check
 	./mr_codec_registry_check
+	./mr_codec_fallback_check
 	./mr_pcm_u8_check
 	./mr_audio_rate_check
 	./mr_aspect_check
@@ -684,7 +690,7 @@ clean:
 	      mr_dither_check mr_yuv_dither_check mr_yuv_planar_queue_check mr_yuv_ham_check mr_mpeg1_probe_check mr_mpeg1_timing_check mr_mpeg2_yuv_check mr_mpeg2_mc_check mr_mpeg2_idct_check mr_mpeg2_bskip_check mr_h264_smoosh_check mr_ps_check mr_ps_pts_check mr_ts_mp2_check mr_ts_video_pes_check mr_mkv_check \
 	      mr_mov_seek_check
 	rm -f mr_legacy_video_check mr_cinepak_indexed_check mr_msvideo1_indexed_check
-	rm -f mr_rawvideo_check mr_codec_registry_check
+	rm -f mr_rawvideo_check mr_codec_registry_check mr_codec_fallback_check
 	rm -f mr_pcm_u8_check
 	rm -f mr_audio_rate_check
 	rm -f mr_aspect_check
