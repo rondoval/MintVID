@@ -994,6 +994,41 @@ int main(void) {
                                  sizeof(error)));
     assert(parsed.display == MR_DISPLAY_NONE && parsed.no_video);
   }
+  /* VideoCore decoding: on by default and then unmentioned (mrplay's own
+   * default); switched off it travels as --no-videocore and survives a
+   * browser's re-parse; --videocore turns it back on. */
+  {
+    mr_play_options o, parsed;
+    char *argv_rt[40];
+    char buf[1024], args[4096], error[128];
+    const char *url = "https://example.test/watch";
+    char *back_argv[] = {"ytgui", "--no-videocore", "--videocore"};
+    int argc_rt;
+    char *p;
+
+    mr_play_options_default(&o);
+    assert(!o.no_videocore);
+    assert(mr_build_player_arguments(args, sizeof(args), &o, url,
+                                     NULL, NULL));
+    assert(!strstr(args, "videocore"));
+    o.no_videocore = 1;
+    assert(mr_build_player_arguments(args, sizeof(args), &o, url,
+                                     NULL, NULL));
+    assert(strstr(args, "--no-videocore"));
+    assert(mr_build_iptv_arguments(buf, sizeof(buf), &o));
+    argv_rt[0] = "ytgui";
+    argc_rt = 1;
+    for (p = strtok(buf, " \n"); p && argc_rt < 40; p = strtok(NULL, " \n"))
+      argv_rt[argc_rt++] = p;
+    mr_play_options_default(&parsed);
+    assert(mr_play_options_parse(&parsed, argc_rt, argv_rt, error,
+                                 sizeof(error)));
+    assert(parsed.no_videocore);
+    mr_play_options_default(&parsed);
+    assert(mr_play_options_parse(&parsed, 3, back_argv, error,
+                                 sizeof(error)));
+    assert(!parsed.no_videocore);
+  }
   remove("/tmp/mr_channels.json");
   remove("/tmp/mr_streams.json");
   mr_iptv_free(&d);

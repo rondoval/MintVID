@@ -177,6 +177,10 @@ typedef struct mr_play_options {
      * chooser's "No Video" row (MR_DISPLAY_NONE); see
      * mr_play_options_no_video(). */
     int no_video;
+    /* --no-videocore: decode with the software decoders only, even where
+     * the Raspberry Pi's VideoCore (videocodec.library) could take the
+     * stream. Off by default: the VPU is used whenever it accepts it. */
+    int no_videocore;
 } mr_play_options;
 
 /* The display modes that play through an RTG window rather than a native

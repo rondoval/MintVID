@@ -12,6 +12,8 @@
  *
  * Rules it keeps, whatever the player does:
  *  - the picture handed out in dec->frame stays valid until the next call;
+ *  - once an output format is accepted, a picture in another one (made
+ *    before the change) is given back, never handed out;
  *  - never more pictures held than the backend can spare: while it waits for
  *    an input buffer it gives the oldest undrained picture back, so the
  *    hardware always has somewhere to write;

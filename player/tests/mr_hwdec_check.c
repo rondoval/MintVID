@@ -411,12 +411,18 @@ int main(void)
     CHECK(fk.log_len[11] == 44);
     mr_decoder_close(&d);
 
-    /* An output change gives every picture back first. */
+    /* An output change gives every picture back first, and a picture still
+     * in the old format after it is given back too, not handed out (the
+     * fake writes BGR24 whatever it is asked). */
     reset_fake(1024, 4, 0);
     CHECK(open_dec(&d) == MR_OK);
     run(&d, 0, 3, pts_linear, got, 512, 0, NULL);
     CHECK(mr_decoder_set_output(&d, MR_PIX_BGR24, 640, 360) == MR_OK);
     CHECK(fk.set_outputs == 1 && outs_lent() == 0 && !d.frame.data);
+    CHECK(run(&d, 3, 3, pts_linear, got, 512, 1, NULL) == 3);
+    CHECK(mr_decoder_set_output(&d, MR_PIX_YUV420P, 0, 0) == MR_OK);
+    CHECK(run(&d, 6, 5, pts_linear, got, 512, 1, NULL) == 0 &&
+          outs_lent() == 0);
     mr_decoder_close(&d);
 
     /* The hardware gives up: an error now, at once later, and no reset. */

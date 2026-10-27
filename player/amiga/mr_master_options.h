@@ -118,6 +118,7 @@ static inline int mr_master_options_apply(mr_play_options *options)
     options->throughput = master.throughput;
     options->skip_trigger_ms = master.skip_trigger_ms;
     options->no_video = master.no_video;
+    options->no_videocore = master.no_videocore;
     return 1;
 }
 

@@ -29,6 +29,9 @@ typedef struct {
     unsigned            ready_head, ready_count;
     mr_hwdec_picture    held;            /* the one in dec->frame          */
     int                 have_held;
+    int                 have_want;       /* a format was asked for...     */
+    mr_pixfmt           want_fmt;        /* ...and pictures in another one
+                                          * are from before the change    */
     uint8_t            *scratch;         /* only for a unit split in parts */
     uint32_t            scratch_cap;
     int                 failed, ended, eos_sent;
@@ -66,6 +69,10 @@ static void pump(hwdec *h)
                 h->free_pkt[h->free_count++] = item.packet;
             break;
         case MR_HWDEC_PICTURE:
+            if (h->have_want && item.picture.fmt != h->want_fmt) {
+                h->ops->release(h->be, item.picture.handle);
+                break;
+            }
             if ((unsigned)h->have_held + h->ready_count >= limit ||
                 h->ready_count == MAX_READY)
                 drop_oldest_ready(h);
@@ -293,10 +300,16 @@ static mr_status hwdec_set_output(mr_decoder *dec, mr_pixfmt fmt, int w,
                                   int ht)
 {
     hwdec *h = (hwdec *)dec->priv;
+    mr_status st;
     if (!h || h->failed) return MR_ERR;
     /* Pictures already out are in the old geometry's buffers. */
     give_back_all(dec, h, 1);
-    return h->ops->set_output(h->be, fmt, w, ht);
+    st = h->ops->set_output(h->be, fmt, w, ht);
+    if (st == MR_OK) {
+        h->have_want = 1;
+        h->want_fmt = fmt;
+    }
+    return st;
 }
 
 mr_status mr_hwdec_attach(mr_decoder *dec, const mr_hwdec_ops *ops,

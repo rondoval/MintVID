@@ -2,6 +2,7 @@
 #include "../core/mr_play_options.h"
 #include "../iptv/mr_iptv.h"
 #include "mr_akiko.h"
+#include "mr_videocore.h"
 #include "mr_gui_menu.h"
 #include "mr_last_dir.h"
 #include "mr_master_options.h"
@@ -52,7 +53,7 @@ enum {
     G_FILE = 1, G_BROWSE, G_MODE, G_C2P, G_H264, G_LACE, G_SCALE,
     G_AUDIO_RATE, G_FAST_BUFFER, G_NO_AUDIO, G_MONO_AUDIO, G_VIDEO_MODE,
     G_PLAY, G_PAUSE, G_STOP, G_FAST, G_IPTV, G_YOUTUBE, G_VOLUME, G_INFO,
-    G_PLAYLIST, G_SKIP_AFTER
+    G_PLAYLIST, G_SKIP_AFTER, G_VIDEOCORE
 };
 
 typedef struct gt_app {
@@ -63,6 +64,8 @@ typedef struct gt_app {
     struct Gadget *file, *mode, *c2p, *h264, *lace, *scale, *info;
     struct Gadget *audio_rate, *fast_buffer, *no_audio, *mono_audio;
     struct Gadget *video_mode, *volume, *skip_after;
+    /* "VideoCore decoding": only when videocodec.library opens. */
+    struct Gadget *videocore;
     struct Gadget *iptv;
     /* Scale row after the last update_mode_controls(): tells a forward
      * click on the cycle gadget from a backward (shift) one. */
@@ -372,6 +375,9 @@ static void read_options(gt_app *app, mr_play_options *options)
                          : MR_FAST_BUFFER_AUTO;
     options->no_audio = gad_value(app, app->no_audio, GTCB_Checked) != 0;
     options->mono_audio = gad_value(app, app->mono_audio, GTCB_Checked) != 0;
+    if (app->videocore)
+        options->no_videocore =
+            gad_value(app, app->videocore, GTCB_Checked) == 0;
     {
         ULONG video = gad_value(app, app->video_mode, GTCY_Active);
         options->throughput = video != 1;
@@ -1234,6 +1240,13 @@ static int build_window(gt_app *app)
      * give their longest labels. */
     app->skip_after = g = add_gadget(app, g, CYCLE_KIND, G_SKIP_AFTER, 384, 92,
         176, 16, "", GTCY_Labels, (ULONG)skip_after_labels);
+    /* The free row below the media buttons (where IPTV/YouTube used to
+     * be), right of where an audio output cycle would go. */
+    app->videocore = NULL;
+    if (mr_videocore_available())
+        app->videocore = g = add_gadget(app, g, CHECKBOX_KIND, G_VIDEOCORE,
+            200, 141, 26, 14, "VideoCore decoding", GTCB_Checked,
+            !(have_saved_options && saved_options.no_videocore));
 
     /* VLC-style lower strip: media buttons stay flush left, the volume
      * slider follows them, and IPTV/YouTube sit before Playlist in the
@@ -1423,7 +1436,7 @@ int main(void)
                 case G_LACE:
                 case G_AUDIO_RATE: case G_FAST_BUFFER:
                 case G_NO_AUDIO: case G_MONO_AUDIO:
-                case G_SKIP_AFTER:
+                case G_SKIP_AFTER: case G_VIDEOCORE:
                     publish_options(&app); break;
                 default: break;
                 }

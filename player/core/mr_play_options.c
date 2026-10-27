@@ -319,6 +319,8 @@ static int append_playback_flags(char *out, size_t cap,
     if (!append_option(out, cap,
                        o->throughput ? "--throughput" : "--no-throughput"))
         return 0;
+    if (o->no_videocore && !append_option(out, cap, "--no-videocore"))
+        return 0;
     /* Always explicit too, so the GUI's "Skip after" choice reaches mrplay
      * (and survives an IPTV/YouTube browser's re-parse) unchanged. */
     snprintf(number, sizeof(number), "--skip-trigger=%u",
@@ -491,6 +493,8 @@ int mr_play_options_parse(mr_play_options *o, int argc, char **argv,
         else if (!strcmp(arg, "--no-video")) o->no_video = 1;
         else if (!strcmp(arg, "--audio-mono")) o->mono_audio = 1;
         else if (!strcmp(arg, "--audio-stereo")) o->mono_audio = 0;
+        else if (!strcmp(arg, "--no-videocore")) o->no_videocore = 1;
+        else if (!strcmp(arg, "--videocore")) o->no_videocore = 0;
         else if (!strcmp(arg, "--throughput")) o->throughput = 1;
         else if (!strcmp(arg, "--no-throughput")) o->throughput = 0;
         else if (!strncmp(arg, "--skip-trigger=", 15)) {

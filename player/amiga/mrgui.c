@@ -52,6 +52,7 @@
 #include "../iptv/mr_iptv.h"
 #include "mr_master_options.h"
 #include "mr_akiko.h"
+#include "mr_videocore.h"
 #include "mr_gui_menu.h"
 #include "mr_last_dir.h"
 #include "mr_player_status.h"
@@ -109,7 +110,8 @@ enum {
     G_YOUTUBE,
     G_VOLUME,
     G_PLAYLIST,
-    G_SKIP_AFTER
+    G_SKIP_AFTER,
+    G_VIDEOCORE
 };
 
 /* Chooser rows are chipset-dependent, so never infer a display mode from a
@@ -136,6 +138,10 @@ static ULONG skip_after_row(unsigned ms)
     }
     return best;
 }
+/* "VideoCore decoding" checkbox (--no-videocore when cleared): created, on a
+ * row of its own, only when videocodec.library opens - otherwise there is
+ * nothing to switch and the window stays as it was. */
+static Object *g_videocore;
 static mr_c2p_mode c2p_values[5];
 static unsigned c2p_count;
 static int add_chooser_node(struct List *list, const char *text);
@@ -412,6 +418,11 @@ static void read_play_options(Object *mode, Object *c2p, Object *h264,
                          : MR_FAST_BUFFER_AUTO;
     options->no_audio = checked_no_audio != 0;
     options->mono_audio = checked_mono != 0;
+    if (g_videocore) {
+        ULONG checked_videocore = 1;
+        GetAttr(CHECKBOX_Checked, g_videocore, &checked_videocore);
+        options->no_videocore = checked_videocore == 0;
+    }
     /* Video rows are fixed, like Scale: 0=All Frames (throughput on), 1=Skip
      * Frames (throughput off) - see where video_modes is built in main().
      * Audio only is the Display chooser's "No Video" row. */
@@ -1340,6 +1351,7 @@ int main(void)
     struct List scale_modes;
     struct List skip_after_modes;
     Object *skip_after_label;
+    Object *controls_videocore;
     struct List audio_rate_modes;
     struct List fast_buffer_modes;
     struct List video_modes;
@@ -1423,6 +1435,8 @@ int main(void)
     skip_after_modes.lh_TailPred = (struct Node *)&skip_after_modes.lh_Head;
     skip_after_label = NULL;
     g_skip_after = NULL;
+    g_videocore = NULL;
+    controls_videocore = NULL;
     audio_rate_modes.lh_Head = (struct Node *)&audio_rate_modes.lh_Tail;
     audio_rate_modes.lh_Tail = NULL;
     audio_rate_modes.lh_TailPred = (struct Node *)&audio_rate_modes.lh_Head;
@@ -1697,6 +1711,18 @@ int main(void)
     skip_after_label = (Object *)NewObject(LABEL_GetClass(), NULL,
                                            LABEL_Text, (ULONG)"Skip after",
                                            TAG_DONE);
+    if (mr_videocore_available()) {
+        g_videocore = (Object *)NewObject(CHECKBOX_GetClass(), NULL,
+                                          GA_ID, G_VIDEOCORE,
+                                          GA_Text, (ULONG)"VideoCore decoding",
+                                          GA_RelVerify, TRUE,
+                                          CHECKBOX_Checked,
+                                          !(have_saved_options &&
+                                            saved_options.no_videocore),
+                                          TAG_DONE);
+        if (!g_videocore)
+            goto cleanup;
+    }
     info = (Object *)NewObject(STRING_GetClass(), NULL,
                                GA_ReadOnly, TRUE,
                                STRINGA_TextVal, (ULONG)"No file selected",
@@ -1783,12 +1809,32 @@ int main(void)
     if (!controls_bottom)
         goto cleanup;
 
+    /* A third row rather than squeezing the full second one past 640
+     * pixels, at its natural width on the left. */
+    if (g_videocore) {
+        controls_videocore = (Object *)NewObject(LAYOUT_GetClass(), NULL,
+                                                 LAYOUT_Orientation,
+                                                 LAYOUT_ORIENT_HORIZ,
+                                                 LAYOUT_HorizAlignment,
+                                                 LALIGN_LEFT,
+                                                 LAYOUT_AddChild,
+                                                 (ULONG)g_videocore,
+                                                 CHILD_WeightedWidth, 0,
+                                                 TAG_DONE);
+        if (!controls_videocore)
+            goto cleanup;
+    }
+
     controls = (Object *)NewObject(LAYOUT_GetClass(), NULL,
                                     LAYOUT_Orientation, LAYOUT_ORIENT_VERT,
                                     LAYOUT_SpaceInner, TRUE,
                                     LAYOUT_AddChild, (ULONG)controls_top,
                                     CHILD_WeightedHeight, 0,
                                     LAYOUT_AddChild, (ULONG)controls_bottom,
+                                    CHILD_WeightedHeight, 0,
+                                    controls_videocore ? LAYOUT_AddChild
+                                                       : TAG_IGNORE,
+                                    (ULONG)controls_videocore,
                                     CHILD_WeightedHeight, 0,
                                     TAG_DONE);
     if (!controls)
@@ -2023,6 +2069,7 @@ int main(void)
                 case G_NO_AUDIO:
                 case G_MONO_AUDIO:
                 case G_SKIP_AFTER:
+                case G_VIDEOCORE:
                     publish_play_options(master_options, mode, c2p, h264,
                                          lace, scale, audio_rate, fast_buffer,
                                          no_audio, mono_audio, video_mode);
@@ -2138,6 +2185,8 @@ cleanup:
                 if (g_skip_after) DisposeObject(g_skip_after);
                 if (skip_after_label) DisposeObject(skip_after_label);
             }
+            if (controls_videocore) DisposeObject(controls_videocore);
+            else if (g_videocore) DisposeObject(g_videocore);
         }
 
         if (buttons) {
@@ -2178,6 +2227,7 @@ cleanup:
     free_chooser_nodes(&video_modes);
     free_chooser_nodes(&skip_after_modes);
     g_skip_after = NULL;
+    g_videocore = NULL;
     close_reaction_classes();
     return status;
 }

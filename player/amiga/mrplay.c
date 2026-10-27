@@ -2198,6 +2198,7 @@ int main(int argc, char **argv)
     int audio_low_rate = 0; /* --audio-rate=low: halve the output rate again */
     int no_audio = 0;       /* --no-audio: skip the decoder/Paula entirely   */
     int no_video = 0;       /* --no-video: audio only, no decoder/display    */
+    int decoder_opened;     /* a decoder for the stream's fourcc took it     */
     int audio_mono = 0;     /* --audio-mono: decode one channel, not two     */
     mr_fast_buffer_mode fast_buffer = MR_FAST_BUFFER_OFF;
     int fast_buffer_option_seen = 0;
@@ -2309,6 +2310,7 @@ int main(int argc, char **argv)
                "[--dv-speed=quality|fast] "
                "[--mpeg2-speed=quality|fast] "
                "[--audio-rate=normal|low] [--no-audio] [--no-video] [--audio-mono] "
+               "[--no-videocore] "
                "[--time] [--live-diag] [--throughput|--no-throughput] "
                "[--tls=1.2|1.3]\n");
         return mrplay_exit(5);
@@ -2445,6 +2447,9 @@ int main(int argc, char **argv)
             }
             else if (!strcmp(argv[i], "--no-audio")) no_audio = 1;
             else if (!strcmp(argv[i], "--no-video")) no_video = 1;
+            /* Software decoding only: hide the hardware decoders. */
+            else if (!strcmp(argv[i], "--no-videocore"))
+                mr_codec_set_hw_enabled(0);
             else if (!strcmp(argv[i], "--audio-mono")) audio_mono = 1;
             else if (!strcmp(argv[i], "--audio-stereo")) audio_mono = 0;
             else if (!strncmp(argv[i], "--fast-buffer=", 14)) {
@@ -2724,6 +2729,7 @@ int main(int argc, char **argv)
         return mrplay_exit(rc);
     }
     codec = mr_codec_find(vi->fourcc);
+    decoder_opened = 0;
     if (!codec) { char reason[MR_PLAYER_STATUS_TEXT_MAX];
                   snprintf(reason, sizeof reason, "%s has no decoder",
                            video_description);
@@ -2745,8 +2751,21 @@ int main(int argc, char **argv)
      * to display_open() below, for the same reason: if this call is what
      * traps, the log needs to already show we got this far. */
     Flush(Output());
-    if (mr_decoder_open_config(&dec, codec, vi->width, vi->height,
-                               vi->config, vi->config_len) != MR_OK) {
+    /* A hardware decoder comes first and refuses what it cannot take; the
+     * next decoder for the same fourcc then gets the stream. */
+    for (;;) {
+        const mr_codec *next;
+        if (mr_decoder_open_config(&dec, codec, vi->width, vi->height,
+                                   vi->config, vi->config_len) == MR_OK) {
+            decoder_opened = 1;
+            break;
+        }
+        next = mr_codec_find_next(vi->fourcc, codec);
+        if (!next) break;
+        printf("decoder %s declined, trying %s\n", codec->name, next->name);
+        codec = next;
+    }
+    if (!decoder_opened) {
         char reason[MR_PLAYER_STATUS_TEXT_MAX];
         printf("decoder init failed\n");
         snprintf(reason, sizeof reason, "%s decoder failed to initialise",
@@ -2886,15 +2905,22 @@ int main(int argc, char **argv)
      * picture to RGB24, which on real m68k is about a third of that adapter's
      * decode time - and the RGB->indexed dither this path then skips costs
      * about as much again. */
-    if (codec == &mr_codec_h264 || codec == &mr_codec_mpeg2)
+    /* A decoder that delivers frames in a format asked of it (the
+     * VideoCore's, mr_decoder_set_output()) joins them with its YUV420P
+     * planes; further down it may be asked for the screen's own rows
+     * instead. */
+    int codec_converts = codec != &mr_codec_h264 && codec != &mr_codec_mpeg2 &&
+        mr_decoder_set_output(&dec, MR_PIX_YUV420P, 0, 0) == MR_OK;
+    int codec_planar = codec == &mr_codec_h264 || codec == &mr_codec_mpeg2 ||
+                       codec_converts;
+    if (codec_planar)
         use_yuv_indexed_queue = display_supports_yuv_indexed(
             disp, vi->width, vi->height, &yuv_dst_w, &yuv_dst_h, &yuv_vscale,
             &indexed_depth, &yuv_ham);
     /* RiVA's P96 2.x-compatible overlay format. Prefer this after AGA's
      * native indexed route and before either RGB queue: H.264/MPEG-2 then
      * need only a 4:2:0 -> packed 4:2:2 byte shuffle. */
-    int use_yuv422_queue = !use_yuv_indexed_queue &&
-        (codec == &mr_codec_h264 || codec == &mr_codec_mpeg2) &&
+    int use_yuv422_queue = !use_yuv_indexed_queue && codec_planar &&
         display_supports_yuv422(disp);
     /* True for a plain 4-, 5- or 8-plane native indexed configuration (see
      * display_backend.h / aga_supports_indexed()) when the YUV path above
@@ -2926,7 +2952,36 @@ int main(int argc, char **argv)
     int use_yuv_rgb_queue = codec == &mr_codec_h264 &&
                             !use_yuv_indexed_queue && !use_yuv422_queue &&
                             !use_indexed_queue;
-    if (!use_yuv_rgb_queue) rtg_half_active = 0;
+    /* The converting decoder on an RGB display does the 68k's work itself.
+     * On a 24-bit P96 screen it delivers BGR24 rows at the size the screen
+     * shows the picture (display_present_size()): the queue and the display
+     * then only copy rows. Elsewhere it delivers RGB24, as the software
+     * decoders do - except for a 16-bit screen, whose big-endian RGB565 it
+     * cannot write: there its planes take the YUV route above. The plain
+     * indexed route dithers RGB24. */
+    int use_codec_bgr_queue = 0;
+    if (codec_converts && !use_yuv_indexed_queue && !use_yuv422_queue) {
+        int present_w, present_h;
+        if (use_indexed_queue) {
+            /* Refused: its planes go to RGB24 on the 68k, which the AGA
+             * backend shows as well. */
+            if (mr_decoder_set_output(&dec, MR_PIX_RGB24, 0, 0) != MR_OK) {
+                use_indexed_queue = 0;
+                use_yuv_rgb_queue = 1;
+            }
+        } else if (display_supports_rgb565(disp)) {
+            use_yuv_rgb_queue = 1;
+        } else if (display_supports_bgr24(disp) &&
+                   display_present_size(disp, vi->width, vi->height,
+                                        &present_w, &present_h) &&
+                   mr_decoder_set_output(&dec, MR_PIX_BGR24, present_w,
+                                         present_h) == MR_OK) {
+            use_codec_bgr_queue = 1;
+        } else if (mr_decoder_set_output(&dec, MR_PIX_RGB24, 0, 0) != MR_OK) {
+            use_yuv_rgb_queue = 1;
+        }
+    }
+    if (!use_yuv_rgb_queue || codec != &mr_codec_h264) rtg_half_active = 0;
     /* A 16-bit P96 screen takes RGB565 rows as they are; a 24-bit one takes
      * BGR24 rows as they are. Anything else gets RGB24 and repacks. */
     int use_yuv_565_queue = use_yuv_rgb_queue &&
@@ -2986,6 +3041,10 @@ int main(int argc, char **argv)
                    use_yuv_565_queue ? "RGB565" :
                    use_yuv_bgr_queue ? "BGR24" : "RGB24",
                    vi->width / 2, vi->height / 2);
+        else if (use_codec_bgr_queue)
+            printf("video path: %s %dx%d -> BGR24, scaled and converted by "
+                   "the decoder (row copy; P96 native)\n", codec->name,
+                   vi->width, vi->height);
         else if (use_yuv_565_queue)
             printf("video path: YUV420P %dx%d -> RGB565 "
                    "(direct-to-queue; P96 native)\n", vi->width, vi->height);
@@ -3334,7 +3393,7 @@ int main(int argc, char **argv)
          * use_yuv_indexed_queue - see queue_copy_indexed()/
          * queue_copy_yuv_indexed()), so one flag covers both. */
         presenter.use_indexed = use_indexed_queue || use_yuv_indexed_queue;
-        presenter.use_bgr = use_yuv_bgr_queue;
+        presenter.use_bgr = use_yuv_bgr_queue || use_codec_bgr_queue;
         presenter.use_rgb565 = use_yuv_565_queue;
         presenter.use_yuv422 = use_yuv422_queue;
         trace.presenter = &presenter;
@@ -3623,6 +3682,8 @@ int main(int argc, char **argv)
                     mr_h264_set_input_pts(&dec, pkt.has_pts, pkt.pts_us);
                     mr_mpeg2_set_input_pts(&dec, pkt.has_pts, pkt.pts_us);
                     mr_h264_set_input_annexb(&dec, pkt.is_annexb);
+                    mr_decoder_set_input(&dec, pkt.has_pts, pkt.pts_us,
+                                         pkt.is_annexb);
                     mr_decoder_decode(&dec, pkt.data, pkt.len);
                 }
                 /* audio packets are discarded: the FIFO is flushed below */
@@ -3892,7 +3953,7 @@ int main(int argc, char **argv)
             if (use_indexed_queue || use_yuv_indexed_queue)
                 display_show_indexed(disp, front->rgb, front->width, front->height,
                                      front->stride, front->dirty_y0, front->dirty_y1);
-            else if (use_yuv_bgr_queue)
+            else if (use_yuv_bgr_queue || use_codec_bgr_queue)
                 display_show_bgr24(disp, front->rgb, front->width, front->height,
                                    front->stride, front->dirty_y0,
                                    front->dirty_y1);
@@ -4551,6 +4612,8 @@ int main(int argc, char **argv)
                     mr_h264_set_input_pts(&dec, pkt.has_pts, pkt.pts_us);
                     mr_mpeg2_set_input_pts(&dec, pkt.has_pts, pkt.pts_us);
                     mr_h264_set_input_annexb(&dec, pkt.is_annexb);
+                    mr_decoder_set_input(&dec, pkt.has_pts, pkt.pts_us,
+                                         pkt.is_annexb);
                     a = monotonic_us();
                     decode_status = mr_decoder_decode(&dec, pkt.data, pkt.len);
                     decode_end = monotonic_us();
@@ -4614,6 +4677,17 @@ int main(int argc, char **argv)
                         quit = 1;
                         continue;
                     }
+                    if (decode_status == MR_ERR) {
+                        /* The decoder is gone (the VPU stopped answering,
+                         * or libavc lost its display buffers): every later
+                         * packet would fail the same way. */
+                        printf("video decoder %s failed at packet %lu - "
+                               "stopping playback\n", codec->name,
+                               (unsigned long)decoded_index);
+                        display_set_status(disp, "Video decoder failed");
+                        quit = 1;
+                        continue;
+                    }
                     if (decode_status == MR_SKIPPED) {
                         /*
                          * Turbo deliberately omitted this source picture.
@@ -4666,8 +4740,11 @@ int main(int argc, char **argv)
                                   (uint64_t)(vi->scale ? vi->scale : 1) *
                                   1000000ULL / vi->rate)
                             : decoded_index * 83333ULL;
-                        uint64_t frame_pts_us = pkt.pts_us;
-                        int frame_has_pts = pkt.has_pts;
+                        /* The packet's own, unless the decoder's pictures
+                         * come out later than their packets and it says
+                         * which (mr_frame.has_pts). */
+                        uint64_t frame_pts_us = dec.frame.pts_us;
+                        int frame_has_pts = dec.frame.has_pts;
                         uint64_t pts = synthetic_pts;
                         /* Libavc emits pictures in display order, which may
                          * differ from the current packet's decode order when
@@ -5048,9 +5125,10 @@ drain_decoded_output:
         uint64_t a = monotonic_us();
         mr_status ds = mr_decoder_flush(&dec);
         const unsigned char *show_data;
-        int show_stride;
+        int show_stride, show_bgr;
         total_decode_us += monotonic_us() - a;
         if (ds != MR_OK) break;
+        show_bgr = dec.frame.fmt == MR_PIX_BGR24;
         show_data = dec.frame.data;
         show_stride = dec.frame.stride;
         if (dec.frame.fmt == MR_PIX_YUV420P) {
@@ -5071,7 +5149,7 @@ drain_decoded_output:
                                NULL, NULL);
             show_data = drain_rgb;
             show_stride = dec.frame.width * 3;
-        } else if (dec.frame.fmt != MR_PIX_RGB24) {
+        } else if (dec.frame.fmt != MR_PIX_RGB24 && !show_bgr) {
             break;          /* nothing else is ever held back for the drain */
         }
 
@@ -5097,19 +5175,17 @@ drain_decoded_output:
 
         /* total_display_us only ever feeds the --time "timing/N frames:"
          * summary below - skip both monotonic_us() calls otherwise. */
-        if (want_time) {
-            a = monotonic_us();
+        if (want_time) a = monotonic_us();
+        if (show_bgr)
+            display_show_bgr24(disp, show_data, dec.frame.width,
+                               dec.frame.height, show_stride,
+                               dec.frame.dirty_y0, dec.frame.dirty_y1);
+        else
             display_show_rgb(disp, show_data, dec.frame.width,
                              dec.frame.height, show_stride,
                              dec.frame.dirty_y0, dec.frame.dirty_y1);
-            player_first_frame_presented(disp, -1);
-            total_display_us += monotonic_us() - a;
-        } else {
-            display_show_rgb(disp, show_data, dec.frame.width,
-                             dec.frame.height, show_stride,
-                             dec.frame.dirty_y0, dec.frame.dirty_y1);
-            player_first_frame_presented(disp, -1);
-        }
+        player_first_frame_presented(disp, -1);
+        if (want_time) total_display_us += monotonic_us() - a;
         frames++;
     }
     free(drain_rgb);

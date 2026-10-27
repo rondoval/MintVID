@@ -13,8 +13,11 @@
  * Frames come out as I420 at the stream's size, or, once the player asks
  * through set_output, in a screen format at the display's size: the VPU does
  * the scaling and the colour conversion, and the rows go straight to the
- * screen. Its rows are whole groups of 32 pixels (64 for I420), so a width
- * that is not gets a wider frame with the picture at its left.
+ * screen. The session is opened with an output format and size, so its
+ * pictures go through the ISP from the start: a session opened without one
+ * gives the decoder's native frames and cannot change format later. The
+ * ISP's rows are whole groups of 32 pixels (64 for I420), so a width that is
+ * not gets a wider frame with the picture at its left.
  */
 #include "../core/mr_hwdec.h"
 #include "../core/mr_avc.h"
@@ -158,12 +161,24 @@ static unsigned vc_wait(void *be, unsigned ms)
     return waited;
 }
 
+/* The ISP's frame for a w x h picture: rows of whole 32 pixels (64 for
+ * I420), an even number of them, the picture at the top left. */
+static void vc_geometry(ULONG vcf, int w, int h, ULONG *row, ULONG *rows,
+                        struct VCRect *dest)
+{
+    *row = (ULONG)mr_hwdec_row_pixels(w, vcf == VCF_I420 ? 64 : 32);
+    *rows = (ULONG)((h + 1) & ~1);
+    dest->X = 0;
+    dest->Y = 0;
+    dest->Width = w;
+    dest->Height = h;
+}
+
 static mr_status vc_set_output(void *be, mr_pixfmt fmt, int w, int h)
 {
     vc_backend *vc = (vc_backend *)be;
     struct VCRect dest;
-    ULONG vcf;
-    int row, rows;
+    ULONG vcf, row, rows;
     LONG rc;
     switch (fmt) {
     case MR_PIX_YUV420P: vcf = VCF_I420; break;
@@ -171,27 +186,19 @@ static mr_status vc_set_output(void *be, mr_pixfmt fmt, int w, int h)
     case MR_PIX_BGR24:   vcf = VCF_BGR24; break;
     default:             return MR_EUNSUPPORTED;
     }
-    /* I420 at the stream's size is the decoder's own output: frames carry
-     * the stream's crop. */
-    if (vcf == VCF_I420 && !w && !h)
-        return VC_SetAttrsTags(vc->s, VCA_OutputFormat, vcf, TAG_DONE)
-               ? MR_EUNSUPPORTED : MR_OK;
     if (!w || !h) {
         w = vc->width;
         h = vc->height;
     }
-    row = mr_hwdec_row_pixels(w, vcf == VCF_I420 ? 64 : 32);
-    rows = (h + 1) & ~1;
-    dest.X = 0;
-    dest.Y = 0;
-    dest.Width = w;
-    dest.Height = h;
+    vc_geometry(vcf, w, h, &row, &rows, &dest);
     rc = VC_SetAttrsTags(vc->s, VCA_OutputFormat, vcf,
-                         VCA_OutputWidth, (ULONG)row,
-                         VCA_OutputHeight, (ULONG)rows,
+                         VCA_OutputWidth, row,
+                         VCA_OutputHeight, rows,
                          VCA_DestRect, (ULONG)&dest, TAG_DONE);
     if (rc) printf("videocore: %s output %dx%d refused (%ld)\n",
-                   vcf == VCF_I420 ? "I420" : "RGB", w, h, (long)rc);
+                   vcf == VCF_I420 ? "I420" : vcf == VCF_BGR24 ? "BGR24"
+                                                              : "RGB24",
+                   w, h, (long)rc);
     return rc ? MR_EUNSUPPORTED : MR_OK;
 }
 
@@ -231,6 +238,8 @@ static int vc_row(ULONG codec, struct VCCodecInfo *ci)
 static mr_status vc_open(mr_decoder *dec, ULONG codec)
 {
     struct VCCodecInfo ci;
+    struct VCRect dest;
+    ULONG row, rows;
     vc_backend *vc;
     LONG err = 0;
 
@@ -289,6 +298,9 @@ static mr_status vc_open(mr_decoder *dec, ULONG codec)
         return MR_ENOMEM;
     }
     vc->timer_open = 1;
+    /* I420 at the container's size, through the ISP, until the player asks
+     * for something else (vc_set_output()). */
+    vc_geometry(VCF_I420, vc->width, vc->height, &row, &rows, &dest);
     vc->s = VC_OpenSessionTags(VCA_Codec, codec,
                                VCA_Kind, VCK_Decoder,
                                VCA_SigMask, 1UL << vc->sig,
@@ -297,6 +309,10 @@ static mr_status vc_open(mr_decoder *dec, ULONG codec)
                                VCA_InputCount, VC_INPUTS,
                                VCA_InputSize, VC_INPUT_SIZE,
                                VCA_OutputCount, VC_OUTPUTS,
+                               VCA_OutputFormat, VCF_I420,
+                               VCA_OutputWidth, row,
+                               VCA_OutputHeight, rows,
+                               VCA_DestRect, (ULONG)&dest,
                                TAG_DONE);
     if (!vc->s) {
         /* No VPU (cma or gpu_mem not set up), or it is busy or gone. */

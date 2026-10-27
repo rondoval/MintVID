@@ -538,7 +538,7 @@ check-cc:
 
 mrplay: check-cc check-mintamp check-kalms $(PLAY) $(CORE) $(KALMS_OBJ) $(MP2_ASM_OBJ) \
         $(MINTAMP_MP3_OBJ) $(MINTAMP_AAC_OBJ) $(LIBA52_OBJ) $(VERSION_HEADER) | check-libavc
-	$(CC) $(CFLAGS) $(MINTAMP_FLAGS) $(LIBA52_FLAGS) -o $@ $(PLAY) $(CORE) \
+	$(CC) $(CFLAGS) -DMR_HAVE_VIDEOCORE $(MINTAMP_FLAGS) $(LIBA52_FLAGS) -o $@ $(PLAY) $(CORE) \
 	    $(MINTAMP_MP3_OBJ) $(MINTAMP_AAC_OBJ) $(LIBA52_OBJ) $(KALMS_OBJ) $(MP2_ASM_OBJ) $(LDFLAGS)
 
 check-kalms:
