@@ -26,7 +26,8 @@ typedef struct {
     /* Optional native RGB565 input: one native uint16_t per pixel, as
      * core/mr_yuv.c's mr_yuv420_to_rgb565() writes it. P96's direct-lock
      * backend implements it for RGBFB_R5G6B5 screens, where it is a row copy
-     * instead of a per-pixel repack of 24-bit input. supports_rgb565()
+     * instead of a per-pixel repack of 24-bit input, and RGBFB_R5G6B5PC
+     * ones, where it swaps the bytes of each word. supports_rgb565()
      * answers for the screen currently open; display.c falls back to
      * unpacking into show() whenever it says no. */
     int   (*supports_rgb565)(void *handle);
@@ -104,6 +105,14 @@ typedef struct {
      * decoder that scales can deliver frames that size and the backend only
      * copies their rows. 0 when the backend cannot say. */
     int   (*present_size)(void *handle, int src_w, int src_h, int *w, int *h);
+    /* Optional: the screen's own pixel layout as an MR_PIX_* value
+     * (core/mr_types.h) when show_native() copies rows in it as they are,
+     * -1 when there is none. Answers for the screen open now; show_native()
+     * gets the layout its rows are in. */
+    int   (*native_format)(void *handle);
+    void  (*show_native)(void *handle, int fmt, const unsigned char *pix,
+                         int w, int h, int stride, int dy0, int dy1,
+                         mr_display_service_fn service, void *service_opaque);
 } display_backend;
 
 extern const display_backend backend_cgx;

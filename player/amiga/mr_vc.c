@@ -82,6 +82,14 @@ static int vc_poll(void *be, mr_hwdec_item *item)
                 p->fmt = f->Format == VCF_RGB24 ? MR_PIX_RGB24 : MR_PIX_BGR24;
                 p->plane[0] = base + f->Offset[0] + y * f->Pitch[0] + x * 3;
                 break;
+            case VCF_BGRA32:
+                p->fmt = MR_PIX_BGRA32;
+                p->plane[0] = base + f->Offset[0] + y * f->Pitch[0] + x * 4;
+                break;
+            case VCF_RGB16:
+                p->fmt = MR_PIX_RGB565LE;
+                p->plane[0] = base + f->Offset[0] + y * f->Pitch[0] + x * 2;
+                break;
             default:                /* nothing asked for this: skip it */
                 VC_ReleaseFrame(vc->s, f);
                 continue;
@@ -181,10 +189,12 @@ static mr_status vc_set_output(void *be, mr_pixfmt fmt, int w, int h)
     ULONG vcf, row, rows;
     LONG rc;
     switch (fmt) {
-    case MR_PIX_YUV420P: vcf = VCF_I420; break;
-    case MR_PIX_RGB24:   vcf = VCF_RGB24; break;
-    case MR_PIX_BGR24:   vcf = VCF_BGR24; break;
-    default:             return MR_EUNSUPPORTED;
+    case MR_PIX_YUV420P:  vcf = VCF_I420; break;
+    case MR_PIX_RGB24:    vcf = VCF_RGB24; break;
+    case MR_PIX_BGR24:    vcf = VCF_BGR24; break;
+    case MR_PIX_BGRA32:   vcf = VCF_BGRA32; break;
+    case MR_PIX_RGB565LE: vcf = VCF_RGB16; break;
+    default:              return MR_EUNSUPPORTED;
     }
     if (!w || !h) {
         w = vc->width;
@@ -196,8 +206,9 @@ static mr_status vc_set_output(void *be, mr_pixfmt fmt, int w, int h)
                          VCA_OutputHeight, rows,
                          VCA_DestRect, (ULONG)&dest, TAG_DONE);
     if (rc) printf("videocore: %s output %dx%d refused (%ld)\n",
-                   vcf == VCF_I420 ? "I420" : vcf == VCF_BGR24 ? "BGR24"
-                                                              : "RGB24",
+                   vcf == VCF_I420 ? "I420" : vcf == VCF_BGR24 ? "BGR24" :
+                   vcf == VCF_BGRA32 ? "BGRA32" :
+                   vcf == VCF_RGB16 ? "RGB565LE" : "RGB24",
                    w, h, (long)rc);
     return rc ? MR_EUNSUPPORTED : MR_OK;
 }

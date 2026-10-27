@@ -42,13 +42,16 @@ static inline uint32_t mr_rb32(const uint8_t *p)
  * denominator for host validation. INDEX8 is a byte-per-pixel index into the
  * fixed native-display palette selected by the caller; YUV420P exposes three
  * borrowed decoder planes for a renderer that can consume them directly.
- * BGR24 is the byte order of a 24-bit P96 screen (RGBFB_B8G8R8), for a codec
- * that can write the display's own rows (see mr_decoder_set_output()). */
+ * BGR24, BGRA32 and RGB565LE are the byte orders of P96 screens
+ * (RGBFB_B8G8R8, RGBFB_B8G8R8A8, RGBFB_R5G6B5PC), for a codec that can write
+ * the display's own rows (see mr_decoder_set_output()). */
 typedef enum {
     MR_PIX_RGB24 = 0,   /* r,g,b per pixel, top-down                        */
     MR_PIX_YUV420P,     /* planar Y, Cb, Cr (2x2 subsampled)                */
     MR_PIX_INDEX8,      /* one fixed-palette index per pixel, top-down      */
-    MR_PIX_BGR24        /* b,g,r per pixel, top-down                        */
+    MR_PIX_BGR24,       /* b,g,r per pixel, top-down                        */
+    MR_PIX_BGRA32,      /* b,g,r,a per pixel (a unused), top-down           */
+    MR_PIX_RGB565LE     /* rrrrrggg gggbbbbb as a little-endian 16-bit word */
 } mr_pixfmt;
 
 typedef struct {

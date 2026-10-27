@@ -673,6 +673,9 @@ typedef struct video_presenter {
     int                  use_indexed;
     /* P96 native BGR queue: present with display_show_bgr24(). */
     int                  use_bgr;
+    /* A converting decoder's rows in this MR_PIX_* layout: present with
+     * display_show_native(). -1 for every other queue. */
+    int                  codec_fmt;
     /* P96 16-bit screen queue: present with display_show_rgb565(). */
     int                  use_rgb565;
     int                  use_yuv422;
@@ -784,6 +787,10 @@ static void present_service_frame(video_presenter *vp)
     if (vp->use_indexed)
         display_show_indexed(vp->disp, front->rgb, front->width, front->height,
                              front->stride, front->dirty_y0, front->dirty_y1);
+    else if (vp->codec_fmt >= 0)
+        display_show_native(vp->disp, vp->codec_fmt, front->rgb, front->width,
+                            front->height, front->stride, front->dirty_y0,
+                            front->dirty_y1);
     else if (vp->use_bgr)
         display_show_bgr24(vp->disp, front->rgb, front->width, front->height,
                            front->stride, front->dirty_y0, front->dirty_y1);
@@ -2953,15 +2960,19 @@ int main(int argc, char **argv)
                             !use_yuv_indexed_queue && !use_yuv422_queue &&
                             !use_indexed_queue;
     /* The converting decoder on an RGB display does the 68k's work itself.
-     * On a 24-bit P96 screen it delivers BGR24 rows at the size the screen
-     * shows the picture (display_present_size()): the queue and the display
-     * then only copy rows. Elsewhere it delivers RGB24, as the software
-     * decoders do - except for a 16-bit screen, whose big-endian RGB565 it
-     * cannot write: there its planes take the YUV route above. The plain
-     * indexed route dithers RGB24. */
-    int use_codec_bgr_queue = 0;
+     * On a P96 screen it delivers rows in the screen's own layout at the size
+     * the screen shows the picture (display_native_format(),
+     * display_present_size()): the queue and the display then only copy rows.
+     * A layout it cannot write is next: a big-endian 16-bit screen gets its
+     * planes on the YUV route above, a 32-bit A8R8G8B8 one BGR24 at that size
+     * for the display to repack. Elsewhere it delivers RGB24, as the software
+     * decoders do. The plain indexed route dithers RGB24. */
+    int codec_screen_fmt = -1, codec_screen_w = 0, codec_screen_h = 0;
     if (codec_converts && !use_yuv_indexed_queue && !use_yuv422_queue) {
         int present_w, present_h;
+        int presented = display_present_size(disp, vi->width, vi->height,
+                                             &present_w, &present_h);
+        int native = display_native_format(disp);
         if (use_indexed_queue) {
             /* Refused: its planes go to RGB24 on the 68k, which the AGA
              * backend shows as well. */
@@ -2969,25 +2980,33 @@ int main(int argc, char **argv)
                 use_indexed_queue = 0;
                 use_yuv_rgb_queue = 1;
             }
+        } else if (presented && native >= 0 &&
+                   mr_decoder_set_output(&dec, (mr_pixfmt)native, present_w,
+                                         present_h) == MR_OK) {
+            codec_screen_fmt = native;
         } else if (display_supports_rgb565(disp)) {
             use_yuv_rgb_queue = 1;
-        } else if (display_supports_bgr24(disp) &&
-                   display_present_size(disp, vi->width, vi->height,
-                                        &present_w, &present_h) &&
+        } else if (presented && display_supports_bgr24(disp) &&
                    mr_decoder_set_output(&dec, MR_PIX_BGR24, present_w,
                                          present_h) == MR_OK) {
-            use_codec_bgr_queue = 1;
+            codec_screen_fmt = MR_PIX_BGR24;
         } else if (mr_decoder_set_output(&dec, MR_PIX_RGB24, 0, 0) != MR_OK) {
             use_yuv_rgb_queue = 1;
         }
+        if (codec_screen_fmt >= 0) {
+            codec_screen_w = present_w;
+            codec_screen_h = present_h;
+        }
     }
     if (!use_yuv_rgb_queue || codec != &mr_codec_h264) rtg_half_active = 0;
-    /* A 16-bit P96 screen takes RGB565 rows as they are; a 24-bit one takes
-     * BGR24 rows as they are. Anything else gets RGB24 and repacks. */
+    /* A 16-bit P96 screen takes RGB565 rows as they are (byte-swapped on a
+     * little-endian one); a B8G8R8 one takes BGR24 rows and an R8G8B8 one
+     * RGB24 rows as they are. Anything else repacks. */
     int use_yuv_565_queue = use_yuv_rgb_queue &&
                             display_supports_rgb565(disp);
     int use_yuv_bgr_queue = use_yuv_rgb_queue && !use_yuv_565_queue &&
-                            display_supports_bgr24(disp);
+                            display_supports_bgr24(disp) &&
+                            display_native_format(disp) != MR_PIX_RGB24;
     if (use_yuv_indexed_queue || use_yuv422_queue || use_yuv_rgb_queue)
         mr_h264_set_yuv_output(&dec, 1);
     /* MPEG-2 exposes planes for either direct display route; ordinary RGB
@@ -3041,10 +3060,16 @@ int main(int argc, char **argv)
                    use_yuv_565_queue ? "RGB565" :
                    use_yuv_bgr_queue ? "BGR24" : "RGB24",
                    vi->width / 2, vi->height / 2);
-        else if (use_codec_bgr_queue)
-            printf("video path: %s %dx%d -> BGR24, scaled and converted by "
-                   "the decoder (row copy; P96 native)\n", codec->name,
-                   vi->width, vi->height);
+        else if (codec_screen_fmt >= 0)
+            printf("video path: %s %dx%d -> %s %dx%d, scaled and converted "
+                   "by the decoder (%s)\n", codec->name,
+                   vi->width, vi->height,
+                   codec_screen_fmt == MR_PIX_BGRA32 ? "BGRA32" :
+                   codec_screen_fmt == MR_PIX_RGB565LE ? "RGB565LE" :
+                   codec_screen_fmt == MR_PIX_RGB24 ? "RGB24" : "BGR24",
+                   codec_screen_w, codec_screen_h,
+                   codec_screen_fmt == display_native_format(disp)
+                       ? "row copy; P96 native" : "repacked by the display");
         else if (use_yuv_565_queue)
             printf("video path: YUV420P %dx%d -> RGB565 "
                    "(direct-to-queue; P96 native)\n", vi->width, vi->height);
@@ -3277,9 +3302,15 @@ int main(int argc, char **argv)
          * budget either
          * overestimates and needlessly clamps video_cap (RGB24 assumed on an
          * indexed path is a 3x-6x overestimate), or underestimates and lets
-         * the queue overrun its RAM budget. */
+         * the queue overrun its RAM budget. A converting decoder's rows are
+         * whole 32 pixels (mr_vc.c). */
         size_t frame_bytes = use_yuv_indexed_queue
                             ? (size_t)yuv_dst_w * (size_t)yuv_dst_h
+                            : codec_screen_fmt >= 0
+                            ? (size_t)((codec_screen_w + 31) & ~31) *
+                              (size_t)codec_screen_h *
+                              (codec_screen_fmt == MR_PIX_BGRA32 ? 4u :
+                               codec_screen_fmt == MR_PIX_RGB565LE ? 2u : 3u)
                             : use_yuv422_queue
                             ? (size_t)vi->width * (size_t)vi->height * 2u
                             : use_indexed_queue
@@ -3393,7 +3424,8 @@ int main(int argc, char **argv)
          * use_yuv_indexed_queue - see queue_copy_indexed()/
          * queue_copy_yuv_indexed()), so one flag covers both. */
         presenter.use_indexed = use_indexed_queue || use_yuv_indexed_queue;
-        presenter.use_bgr = use_yuv_bgr_queue || use_codec_bgr_queue;
+        presenter.use_bgr = use_yuv_bgr_queue;
+        presenter.codec_fmt = codec_screen_fmt;
         presenter.use_rgb565 = use_yuv_565_queue;
         presenter.use_yuv422 = use_yuv422_queue;
         trace.presenter = &presenter;
@@ -3953,7 +3985,11 @@ int main(int argc, char **argv)
             if (use_indexed_queue || use_yuv_indexed_queue)
                 display_show_indexed(disp, front->rgb, front->width, front->height,
                                      front->stride, front->dirty_y0, front->dirty_y1);
-            else if (use_yuv_bgr_queue || use_codec_bgr_queue)
+            else if (codec_screen_fmt >= 0)
+                display_show_native(disp, codec_screen_fmt, front->rgb,
+                                    front->width, front->height, front->stride,
+                                    front->dirty_y0, front->dirty_y1);
+            else if (use_yuv_bgr_queue)
                 display_show_bgr24(disp, front->rgb, front->width, front->height,
                                    front->stride, front->dirty_y0,
                                    front->dirty_y1);
@@ -5125,10 +5161,10 @@ drain_decoded_output:
         uint64_t a = monotonic_us();
         mr_status ds = mr_decoder_flush(&dec);
         const unsigned char *show_data;
-        int show_stride, show_bgr;
+        int show_stride, show_fmt;
         total_decode_us += monotonic_us() - a;
         if (ds != MR_OK) break;
-        show_bgr = dec.frame.fmt == MR_PIX_BGR24;
+        show_fmt = dec.frame.fmt;
         show_data = dec.frame.data;
         show_stride = dec.frame.stride;
         if (dec.frame.fmt == MR_PIX_YUV420P) {
@@ -5149,7 +5185,8 @@ drain_decoded_output:
                                NULL, NULL);
             show_data = drain_rgb;
             show_stride = dec.frame.width * 3;
-        } else if (dec.frame.fmt != MR_PIX_RGB24 && !show_bgr) {
+            show_fmt = MR_PIX_RGB24;
+        } else if (dec.frame.fmt == MR_PIX_INDEX8) {
             break;          /* nothing else is ever held back for the drain */
         }
 
@@ -5176,14 +5213,11 @@ drain_decoded_output:
         /* total_display_us only ever feeds the --time "timing/N frames:"
          * summary below - skip both monotonic_us() calls otherwise. */
         if (want_time) a = monotonic_us();
-        if (show_bgr)
-            display_show_bgr24(disp, show_data, dec.frame.width,
-                               dec.frame.height, show_stride,
-                               dec.frame.dirty_y0, dec.frame.dirty_y1);
-        else
-            display_show_rgb(disp, show_data, dec.frame.width,
-                             dec.frame.height, show_stride,
-                             dec.frame.dirty_y0, dec.frame.dirty_y1);
+        /* RGB24, or a converting decoder's rows (display_show_native()
+         * takes either). */
+        display_show_native(disp, show_fmt, show_data, dec.frame.width,
+                            dec.frame.height, show_stride,
+                            dec.frame.dirty_y0, dec.frame.dirty_y1);
         player_first_frame_presented(disp, -1);
         if (want_time) total_display_us += monotonic_us() - a;
         frames++;

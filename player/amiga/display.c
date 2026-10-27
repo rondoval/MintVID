@@ -9,6 +9,7 @@
 #include "amiga_display.h"
 #include "display_backend.h"
 #include "../core/mr_yuv.h"
+#include "../core/mr_types.h"
 
 #include <proto/exec.h>
 #include <proto/dos.h>
@@ -87,7 +88,8 @@ struct amiga_display {
     int                    open_w, open_h;
     char                   open_title[128];
     /* Scratch RGB24 buffer for the software fallbacks of
-     * display_show_yuv422() and display_show_rgb565() - only allocated the
+     * display_show_yuv422(), display_show_rgb565() and display_show_native()
+     * - only allocated the
      * first time the active backend cannot take that format natively (see
      * switch_to_cgx_fallback()); NULL otherwise. */
     unsigned char         *yuv422_fallback_buf;
@@ -307,11 +309,34 @@ int display_supports_rgb565(amiga_display *d)
            d->be->supports_rgb565(d->h);
 }
 
+/* The fallbacks' RGB24 scratch frame, w x h; NULL if it cannot grow. */
+static unsigned char *fallback_rgb(amiga_display *d, int w, int h)
+{
+    size_t need = (size_t)w * 3u * (size_t)h;
+    unsigned char *p;
+    if (d->yuv422_fallback_cap < need) {
+        p = (unsigned char *)realloc(d->yuv422_fallback_buf, need);
+        if (!p) return NULL;
+        d->yuv422_fallback_buf = p;
+        d->yuv422_fallback_cap = need;
+    }
+    return d->yuv422_fallback_buf;
+}
+
+/* One RGB565 pixel to RGB24, each field's top bits replicated into its low
+ * bits. */
+static void unpack_rgb565(unsigned v, unsigned char *o)
+{
+    unsigned r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
+    o[0] = (unsigned char)((r << 3) | (r >> 2));
+    o[1] = (unsigned char)((g << 2) | (g >> 4));
+    o[2] = (unsigned char)((b << 3) | (b >> 2));
+}
+
 void display_show_rgb565(amiga_display *d, const unsigned char *pix,
                          int w, int h, int stride, int dy0, int dy1)
 {
-    size_t need;
-    unsigned char *p;
+    unsigned char *rgb;
     int x, y;
 
     if (!d || !pix || w <= 0 || h <= 0) return;
@@ -324,32 +349,80 @@ void display_show_rgb565(amiga_display *d, const unsigned char *pix,
 
     /* The backend or its screen changed since the queue format was chosen
      * (a fallback to CGX, or a screen that is no longer 16-bit). Unpack the
-     * dirty rows to RGB24, replicating each field's top bits into its low
-     * bits, and use the ordinary show(). Correctness only, not speed. The
-     * scratch buffer is shared with display_show_yuv422()'s fallback. */
+     * dirty rows to RGB24 and use the ordinary show(). Correctness only, not
+     * speed. */
     if (dy0 < 0) dy0 = 0;
     if (dy1 > h) dy1 = h;
     if (dy1 <= dy0) return;
-    need = (size_t)w * 3u * (size_t)h;
-    if (d->yuv422_fallback_cap < need) {
-        p = (unsigned char *)realloc(d->yuv422_fallback_buf, need);
-        if (!p) return;
-        d->yuv422_fallback_buf = p;
-        d->yuv422_fallback_cap = need;
-    }
+    rgb = fallback_rgb(d, w, h);
+    if (!rgb) return;
     for (y = dy0; y < dy1; y++) {
         const UWORD *src = (const UWORD *)(pix + (size_t)y * (size_t)stride);
-        unsigned char *o = d->yuv422_fallback_buf + (size_t)y * (size_t)w * 3u;
-        for (x = 0; x < w; x++) {
-            unsigned v = src[x];
-            unsigned r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
-            o[0] = (unsigned char)((r << 3) | (r >> 2));
-            o[1] = (unsigned char)((g << 2) | (g >> 4));
-            o[2] = (unsigned char)((b << 3) | (b >> 2));
-            o += 3;
+        unsigned char *o = rgb + (size_t)y * (size_t)w * 3u;
+        for (x = 0; x < w; x++, o += 3)
+            unpack_rgb565(src[x], o);
+    }
+    display_show_rgb(d, rgb, w, h, w * 3, dy0, dy1);
+}
+
+int display_native_format(amiga_display *d)
+{
+    if (!d || !d->be->native_format || !d->be->show_native) return -1;
+    return d->be->native_format(d->h);
+}
+
+void display_show_native(amiga_display *d, int fmt, const unsigned char *pix,
+                         int w, int h, int stride, int dy0, int dy1)
+{
+    unsigned char *rgb;
+    int x, y;
+
+    if (!d || !pix || w <= 0 || h <= 0) return;
+
+    if (display_native_format(d) == fmt) {
+        d->be->show_native(d->h, fmt, pix, w, h, stride, dy0, dy1,
+                           d->service, d->service_opaque);
+        return;
+    }
+    if (fmt == MR_PIX_RGB24) {
+        display_show_rgb(d, pix, w, h, stride, dy0, dy1);
+        return;
+    }
+    if (fmt == MR_PIX_BGR24 && display_supports_bgr24(d)) {
+        display_show_bgr24(d, pix, w, h, stride, dy0, dy1);
+        return;
+    }
+
+    /* The backend or its screen changed since the decoder was asked for
+     * this layout, as for display_show_rgb565(). */
+    if (dy0 < 0) dy0 = 0;
+    if (dy1 > h) dy1 = h;
+    if (dy1 <= dy0) return;
+    rgb = fallback_rgb(d, w, h);
+    if (!rgb) return;
+    for (y = dy0; y < dy1; y++) {
+        const unsigned char *s = pix + (size_t)y * (size_t)stride;
+        unsigned char *o = rgb + (size_t)y * (size_t)w * 3u;
+        switch (fmt) {
+        case MR_PIX_BGR24:
+        case MR_PIX_BGRA32: {
+            int step = fmt == MR_PIX_BGR24 ? 3 : 4;
+            for (x = 0; x < w; x++, s += step, o += 3) {
+                o[0] = s[2];
+                o[1] = s[1];
+                o[2] = s[0];
+            }
+            break;
+        }
+        case MR_PIX_RGB565LE:
+            for (x = 0; x < w; x++, s += 2, o += 3)
+                unpack_rgb565((unsigned)s[0] | ((unsigned)s[1] << 8), o);
+            break;
+        default:
+            return;
         }
     }
-    display_show_rgb(d, d->yuv422_fallback_buf, w, h, w * 3, dy0, dy1);
+    display_show_rgb(d, rgb, w, h, w * 3, dy0, dy1);
 }
 
 int display_supports_yuv422(amiga_display *d)
@@ -361,8 +434,7 @@ int display_supports_yuv422(amiga_display *d)
 void display_show_yuv422(amiga_display *d, const unsigned char *yuv,
                          int w, int h, int stride, int dy0, int dy1)
 {
-    size_t need;
-    unsigned char *p;
+    unsigned char *rgb;
 
     if (!d || !yuv || w <= 0 || h <= 0) return;
 
@@ -380,16 +452,10 @@ void display_show_yuv422(amiga_display *d, const unsigned char *yuv,
      * (not just [dy0,dy1)) for simplicity: this path only exists as a
      * last-resort correctness fallback once real hardware overlay is
      * already unavailable, not a performance-sensitive one. */
-    need = (size_t)w * 3u * (size_t)h;
-    if (d->yuv422_fallback_cap < need) {
-        p = (unsigned char *)realloc(d->yuv422_fallback_buf, need);
-        if (!p) return;
-        d->yuv422_fallback_buf = p;
-        d->yuv422_fallback_cap = need;
-    }
-    if (!mr_y4u2v2_to_rgb24(d->yuv422_fallback_buf, w * 3, yuv, stride, w, h))
+    rgb = fallback_rgb(d, w, h);
+    if (!rgb || !mr_y4u2v2_to_rgb24(rgb, w * 3, yuv, stride, w, h))
         return;
-    display_show_rgb(d, d->yuv422_fallback_buf, w, h, w * 3, dy0, dy1);
+    display_show_rgb(d, rgb, w, h, w * 3, dy0, dy1);
 }
 
 void display_set_service(amiga_display *d, mr_display_service_fn fn,

@@ -223,10 +223,21 @@ void display_show_bgr24(amiga_display *d, const unsigned char *bgr,
 int display_present_size(amiga_display *d, int src_w, int src_h,
                          int *w, int *h);
 
+/* The screen's own pixel layout as an MR_PIX_* value (core/mr_types.h:
+ * BGR24, RGB24, BGRA32 or RGB565LE) when the backend copies rows in it as
+ * they are, -1 otherwise. A decoder that converts can deliver that layout
+ * at display_present_size(). display_show_native() takes rows in the layout
+ * `fmt` names and always works: if the backend or its screen changed since,
+ * it unpacks them to RGB24 for the ordinary show(). */
+int display_native_format(amiga_display *d);
+void display_show_native(amiga_display *d, int fmt, const unsigned char *pix,
+                         int w, int h, int stride, int dy0, int dy1);
+
 /* Native RGB565 path (one native uint16_t per pixel, stride in bytes - see
  * core/mr_yuv.h's mr_yuv420_to_rgb565()). display_supports_rgb565() is true
  * when the active backend writes it to a 16-bit screen with a row copy (P96
- * direct lock on RGBFB_R5G6B5). display_show_rgb565() always works: if the
+ * direct lock on RGBFB_R5G6B5; RGBFB_R5G6B5PC swaps each word's bytes).
+ * display_show_rgb565() always works: if the
  * backend or its screen changes mid-session it unpacks to RGB24 and uses the
  * ordinary show(), the same fallback shape as display_show_yuv422(). */
 int display_supports_rgb565(amiga_display *d);

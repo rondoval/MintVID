@@ -11,13 +11,14 @@
  * That means the backend must already know the bitmap's native pixel layout;
  * there is no free conversion here. p96GetBitMapAttr(bm, P96BMA_RGBFORMAT) is
  * queried at open time (and rechecked whenever the underlying bitmap changes)
- * and only three native layouts are supported: RGBFB_B8G8R8 (24-bit BGR, the
+ * and only these native layouts are supported: RGBFB_B8G8R8 (24-bit BGR, the
  * common real Picasso96 truecolour mode), RGBFB_R5G6B5 (16-bit, the common
  * "reduce RTG memory traffic" mode - see display_cgx.c's own private-screen
  * comment for why that depth is worth preferring) and RGBFB_A8R8G8B8 (32-bit,
- * alpha unused). Only the plain big-endian layouts are handled, not the "PC"
- * byte-swapped RGBFB_*PC variants (rare on real 68k RTG boards). Any of
- * those, or anything else p96GetBitMapAttr() reports, fail open() cleanly and
+ * alpha unused), plus the layouts a Raspberry Pi's VideoCore.card uses:
+ * RGBFB_R5G6B5PC (16-bit, little-endian words), RGBFB_R8G8B8 and
+ * RGBFB_B8G8R8A8 (32-bit, alpha unused). Anything else
+ * p96GetBitMapAttr() reports fails open() cleanly and
  * display_open()'s fallback chain lands on backend_cgx instead - so selecting
  * P96 on an unsupported screen format never loses playback, only the chance
  * at the faster path. p96_open_private_screen() tries depths in that same
@@ -59,6 +60,7 @@
 #include "mr_aspect.h"
 #include "rtg_mode_pick.h"
 #include "../core/mr_scale.h"
+#include "../core/mr_types.h"
 
 #include <stddef.h>
 #include <exec/types.h>
@@ -85,23 +87,28 @@
 #define MR_P96_STRIP_ROWS 32
 
 /* Native bitmap pixel layouts this backend can write directly - see the file
- * header comment. Ordered fastest (fewest bytes/pixel, least RTG memory
- * traffic) first; p96_open_private_screen() tries to open a screen in this
- * same order (p96_depth_preference[]). */
+ * header comment. p96_open_private_screen() tries depths fastest (fewest
+ * bytes/pixel, least RTG memory traffic) first (p96_depth_preference[]). */
 typedef enum {
     P96_FMT_NONE = 0,
     P96_FMT_RGB565,   /* RGBFB_R5G6B5,   2 bytes/pixel */
     P96_FMT_BGR24,    /* RGBFB_B8G8R8,   3 bytes/pixel */
-    P96_FMT_ARGB32    /* RGBFB_A8R8G8B8, 4 bytes/pixel, alpha unused */
+    P96_FMT_ARGB32,   /* RGBFB_A8R8G8B8, 4 bytes/pixel, alpha unused */
+    P96_FMT_RGB565PC, /* RGBFB_R5G6B5PC, 2 bytes/pixel, little-endian */
+    P96_FMT_RGB24,    /* RGBFB_R8G8B8,   3 bytes/pixel */
+    P96_FMT_BGRA32    /* RGBFB_B8G8R8A8, 4 bytes/pixel, alpha unused */
 } p96_fmt;
 
 static int p96_fmt_bytes(p96_fmt fmt)
 {
     switch (fmt) {
-    case P96_FMT_RGB565: return 2;
-    case P96_FMT_BGR24:  return 3;
-    case P96_FMT_ARGB32: return 4;
-    default:              return 0;
+    case P96_FMT_RGB565:
+    case P96_FMT_RGB565PC: return 2;
+    case P96_FMT_BGR24:
+    case P96_FMT_RGB24:    return 3;
+    case P96_FMT_ARGB32:
+    case P96_FMT_BGRA32:   return 4;
+    default:               return 0;
     }
 }
 
@@ -326,7 +333,7 @@ static struct Window *p96_open_window(p96_state *s, const char *title,
     return win;
 }
 
-/* Three native layouts are supported today - see the file header comment.
+/* The native layouts supported - see the file header comment.
  * bm may be any live BitMap (public screen or a private one this backend
  * just opened). Cross-checks P96BMA_BYTESPERPIXEL against the format as an
  * extra sanity check, not just trust in the RGBFORMAT enum value alone. */
@@ -337,9 +344,12 @@ static p96_fmt detect_bitmap_format(struct BitMap *bm)
     format = p96GetBitMapAttr(bm, P96BMA_RGBFORMAT);
     bpp = p96GetBitMapAttr(bm, P96BMA_BYTESPERPIXEL);
     switch (format) {
-    case RGBFB_R5G6B5:   return bpp == 2 ? P96_FMT_RGB565 : P96_FMT_NONE;
-    case RGBFB_B8G8R8:   return bpp == 3 ? P96_FMT_BGR24  : P96_FMT_NONE;
-    case RGBFB_A8R8G8B8: return bpp == 4 ? P96_FMT_ARGB32 : P96_FMT_NONE;
+    case RGBFB_R5G6B5:   return bpp == 2 ? P96_FMT_RGB565   : P96_FMT_NONE;
+    case RGBFB_B8G8R8:   return bpp == 3 ? P96_FMT_BGR24    : P96_FMT_NONE;
+    case RGBFB_A8R8G8B8: return bpp == 4 ? P96_FMT_ARGB32   : P96_FMT_NONE;
+    case RGBFB_R5G6B5PC: return bpp == 2 ? P96_FMT_RGB565PC : P96_FMT_NONE;
+    case RGBFB_R8G8B8:   return bpp == 3 ? P96_FMT_RGB24    : P96_FMT_NONE;
+    case RGBFB_B8G8R8A8: return bpp == 4 ? P96_FMT_BGRA32   : P96_FMT_NONE;
     default:              return P96_FMT_NONE;
     }
 }
@@ -420,8 +430,8 @@ static void *p96_open(int w, int h, const char *title)
     if (s->fmt == P96_FMT_NONE) {
         if (g_display_want_time)
             printf("p96: screen bitmap format is not one of the supported "
-                   "native layouts (16-bit RGB565, 24-bit BGR, 32-bit "
-                   "ARGB) - falling back to WritePixelArray\n");
+                   "native layouts (16-bit RGB565, 24-bit RGB/BGR, 32-bit "
+                   "ARGB/BGRA) - falling back to WritePixelArray\n");
         CloseWindow(s->win);
         p96_close_private_screen(&s->screen, "unsupported format");
         FreeVec(s);
@@ -618,7 +628,7 @@ static void scale_rgb24_strip(p96_state *s, const unsigned char *src, int sw,
  * write_pixel_strip). Used to erase the last-drawn video rect at its OLD
  * absolute screen position when the window has moved - see the p96_state
  * comment on win_x/win_y for why that cleanup is this backend's own job.
- * A zero byte is black in all three supported layouts (RGBFB_A8R8G8B8's
+ * A zero byte is black in every supported layout (the 32-bit layouts'
  * alpha byte is unused, so a zeroed alpha there is harmless too), so this
  * needs no per-format case, just the right byte count via p96_fmt_bytes(). */
 static void clear_pixel_rect(struct BitMap *bm, p96_fmt fmt, int x, int y,
@@ -640,25 +650,54 @@ static void clear_pixel_rect(struct BitMap *bm, p96_fmt fmt, int x, int y,
     p96UnlockBitMap(bm, lock);
 }
 
-/* Source layouts p96_show_packed() accepts. */
-enum { P96_SRC_RGB24 = 0, P96_SRC_BGR24 = 1, P96_SRC_RGB565 = 2 };
+/* Source layouts p96_show_packed() accepts: the decoders' RGB24, the queue's
+ * BGR24 and RGB565 (big-endian words), and the rest of the screens' own
+ * layouts, which a decoder that converts can write (p96_native_format()). */
+enum { P96_SRC_RGB24 = 0, P96_SRC_BGR24 = 1, P96_SRC_RGB565 = 2,
+       P96_SRC_BGRA32 = 3, P96_SRC_RGB565LE = 4 };
+
+/* The source layout that is `fmt`'s own (copied as it is), or -1. */
+static int p96_native_src(p96_fmt fmt)
+{
+    switch (fmt) {
+    case P96_FMT_RGB565:   return P96_SRC_RGB565;
+    case P96_FMT_BGR24:    return P96_SRC_BGR24;
+    case P96_FMT_RGB565PC: return P96_SRC_RGB565LE;
+    case P96_FMT_RGB24:    return P96_SRC_RGB24;
+    case P96_FMT_BGRA32:   return P96_SRC_BGRA32;
+    default:               return -1;
+    }
+}
+
+static int p96_src_bytes(int src_kind)
+{
+    switch (src_kind) {
+    case P96_SRC_RGB565:
+    case P96_SRC_RGB565LE: return 2;
+    case P96_SRC_BGRA32:   return 4;
+    default:               return 3;
+    }
+}
 
 /* Lock the live bitmap and write `rows` into native screen memory, in
- * whichever of the three supported layouts `fmt` names (see the file header
+ * whichever of the supported layouts `fmt` names (see the file header
  * comment). A source already in the screen's own layout (BGR24 on
- * RGBFB_B8G8R8, RGB565 on RGBFB_R5G6B5) is a row memcpy; the H.264 queue
- * produces exactly that, so its frames need no per-pixel work here. Other
- * combinations repack per pixel, with the layout chosen once per strip
- * rather than per pixel. An RGB565 source only ever reaches an RGB565
- * screen (display_supports_rgb565() gates it); if the screen changed under
- * it the strip is refused. Never holds the bitmap lock across a service()
- * call - see the file header comment.
+ * RGBFB_B8G8R8, RGB565 on RGBFB_R5G6B5, and so on - p96_native_src()) is a
+ * row memcpy; the H.264 queue and a converting decoder produce exactly that,
+ * so their frames need no per-pixel work here. RGB24 and BGR24 repack per
+ * pixel into any layout, with the layout chosen once per strip rather than
+ * per pixel. A 16-bit source only ever reaches a 16-bit screen
+ * (display_supports_rgb565() gates it), byte-swapped when the word orders
+ * differ, and BGRA32 only its own; if the screen changed under them the
+ * strip is refused. Never holds the bitmap lock across a service() call -
+ * see the file header comment.
  *
  * The 16/32-bit stores below are plain UWORD/ULONG writes at pixel-aligned
  * (even/4-byte) offsets - on this big-endian target that alone produces the
  * exact big-endian byte order RGBFB_R5G6B5 ("rrrrrggggggbbbbb" as one
- * 16-bit word) and RGBFB_A8R8G8B8 ("00000000rrrrrrrrggggggggbbbbbbbb" as
- * one 32-bit word) document, with no separate byte-swap step needed. */
+ * 16-bit word), RGBFB_A8R8G8B8 ("00000000rrrrrrrrggggggggbbbbbbbb" as one
+ * 32-bit word) and RGBFB_B8G8R8A8 (b,g,r,0 in memory) document; the PC
+ * layout's word is swapped first. */
 static int write_pixel_strip(struct BitMap *bm, int dst_x, int dst_y,
                              const unsigned char *src, int src_stride,
                              int w, int rows, int src_kind, p96_fmt fmt)
@@ -666,13 +705,15 @@ static int write_pixel_strip(struct BitMap *bm, int dst_x, int dst_y,
     struct RenderInfo ri;
     LONG lock;
     int y, bpp = p96_fmt_bytes(fmt);
+    int src_bpp = p96_src_bytes(src_kind);
     int ri_off = src_kind == P96_SRC_BGR24 ? 2 : 0;   /* red byte   */
     int bi_off = 2 - ri_off;                            /* blue byte  */
+    int copy = src_kind == p96_native_src(fmt);
     unsigned char *base;
     int bpr;
 
     if (!bpp) return 0;
-    if (src_kind == P96_SRC_RGB565 && fmt != P96_FMT_RGB565) return 0;
+    if (!copy && src_bpp != 3 && (src_bpp != 2 || bpp != 2)) return 0;
     lock = p96LockBitMap(bm, (UBYTE *)&ri, sizeof ri);
     if (!lock) return 0;
 
@@ -683,9 +724,15 @@ static int write_pixel_strip(struct BitMap *bm, int dst_x, int dst_y,
         const unsigned char *srow = src + (size_t)y * (size_t)src_stride;
         unsigned char *drow = base + (size_t)y * (size_t)bpr;
         int x;
-        if ((fmt == P96_FMT_BGR24 && src_kind == P96_SRC_BGR24) ||
-            (fmt == P96_FMT_RGB565 && src_kind == P96_SRC_RGB565)) {
+        if (copy) {
             memcpy(drow, srow, (size_t)w * (size_t)bpp);
+            continue;
+        }
+        if (src_bpp == 2) {
+            const UWORD *s16 = (const UWORD *)srow;
+            UWORD *d16 = (UWORD *)drow;
+            for (x = 0; x < w; x++)
+                d16[x] = (UWORD)((s16[x] << 8) | (s16[x] >> 8));
             continue;
         }
         switch (fmt) {
@@ -694,6 +741,13 @@ static int write_pixel_strip(struct BitMap *bm, int dst_x, int dst_y,
                 drow[x * 3 + 0] = srow[x * 3 + bi_off];
                 drow[x * 3 + 1] = srow[x * 3 + 1];
                 drow[x * 3 + 2] = srow[x * 3 + ri_off];
+            }
+            break;
+        case P96_FMT_RGB24:
+            for (x = 0; x < w; x++) {
+                drow[x * 3 + 0] = srow[x * 3 + ri_off];
+                drow[x * 3 + 1] = srow[x * 3 + 1];
+                drow[x * 3 + 2] = srow[x * 3 + bi_off];
             }
             break;
         case P96_FMT_RGB565: {
@@ -705,12 +759,31 @@ static int write_pixel_strip(struct BitMap *bm, int dst_x, int dst_y,
             }
             break;
         }
+        case P96_FMT_RGB565PC: {
+            UWORD *d16 = (UWORD *)drow;
+            for (x = 0; x < w; x++) {
+                const unsigned char *sp = srow + x * 3;
+                UWORD v = (UWORD)(((sp[ri_off] & 0xF8) << 8) |
+                                  ((sp[1] & 0xFC) << 3) | (sp[bi_off] >> 3));
+                d16[x] = (UWORD)((v << 8) | (v >> 8));
+            }
+            break;
+        }
         case P96_FMT_ARGB32: {
             ULONG *d32 = (ULONG *)drow;
             for (x = 0; x < w; x++) {
                 const unsigned char *sp = srow + x * 3;
                 d32[x] = ((ULONG)sp[ri_off] << 16) | ((ULONG)sp[1] << 8) |
                          (ULONG)sp[bi_off];
+            }
+            break;
+        }
+        case P96_FMT_BGRA32: {
+            ULONG *d32 = (ULONG *)drow;
+            for (x = 0; x < w; x++) {
+                const unsigned char *sp = srow + x * 3;
+                d32[x] = ((ULONG)sp[bi_off] << 24) | ((ULONG)sp[1] << 16) |
+                         ((ULONG)sp[ri_off] << 8);
             }
             break;
         }
@@ -812,9 +885,14 @@ static void p96_show_packed(void *h, const unsigned char *rgb, int w, int hh,
         s->timing.src_w = w; s->timing.src_h = hh;
         s->timing.dst_w = s->dw; s->timing.dst_h = s->dh;
         s->timing.src_format = src_kind == P96_SRC_RGB565 ? "RGB565" :
+                               src_kind == P96_SRC_RGB565LE ? "RGB565LE" :
+                               src_kind == P96_SRC_BGRA32 ? "BGRA32" :
                                src_kind == P96_SRC_BGR24 ? "BGR24" : "RGB24";
         s->timing.dst_format = s->fmt == P96_FMT_RGB565 ? "RGB565" :
-                               s->fmt == P96_FMT_ARGB32 ? "ARGB32" : "BGR24";
+                               s->fmt == P96_FMT_RGB565PC ? "RGB565PC" :
+                               s->fmt == P96_FMT_ARGB32 ? "ARGB32" :
+                               s->fmt == P96_FMT_BGRA32 ? "BGRA32" :
+                               s->fmt == P96_FMT_RGB24 ? "RGB24" : "BGR24";
     }
     native = s->dw == w && s->dh == hh;
     if (timing) {
@@ -826,7 +904,14 @@ static void p96_show_packed(void *h, const unsigned char *rgb, int w, int hh,
     bm = s->win->RPort->BitMap;
 
     if (!native) {
-        int y;
+        int y, src16 = p96_src_bytes(src_kind) == 2;
+        /* Only a converting decoder writes BGRA32, and always at the size
+         * p96_present_size() gave it, so there is no 32-bit scaler. */
+        if (src_kind == P96_SRC_BGRA32) {
+            printf("p96-error: BGRA32 frame %dx%d is not the %dx%d shown - "
+                   "dropping frame\n", w, hh, s->dw, s->dh);
+            return;
+        }
         if (timing) mark = clock();
         if (service) service(service_opaque);
         if (!ensure_scaled(s, s->dw)) {
@@ -860,7 +945,7 @@ static void p96_show_packed(void *h, const unsigned char *rgb, int w, int hh,
             if (timing) step = clock();
             /* The strip buffer holds dw*3 bytes a row; 16-bit pixels use
              * dw*2 of it, at an even stride. */
-            if (src_kind == P96_SRC_RGB565)
+            if (src16)
                 mr_scale_resize_u16_strip(rgb, w, hh, stride, s->scaled,
                                           s->dw, s->dh, s->dw * 2, y, rows);
             else
@@ -871,8 +956,7 @@ static void p96_show_packed(void *h, const unsigned char *rgb, int w, int hh,
             if (!write_pixel_strip(bm, s->win_x + s->bl + s->dx,
                                    s->win_y + s->bt + s->dy + y,
                                    s->scaled,
-                                   src_kind == P96_SRC_RGB565 ? s->dw * 2
-                                                              : s->scaled_stride,
+                                   src16 ? s->dw * 2 : s->scaled_stride,
                                    s->dw, rows, src_kind, s->fmt))
                 printf("p96-error: p96LockBitMap failed - dropped strip\n");
             if (timing) s->timing.blit_us += elapsed_us(step);
@@ -958,10 +1042,12 @@ static int p96_present_size(void *h, int src_w, int src_h, int *w, int *hh)
     return 1;
 }
 
+/* Big-endian RGB565 rows: copied to RGBFB_R5G6B5, byte-swapped into
+ * RGBFB_R5G6B5PC. */
 static int p96_supports_rgb565(void *h)
 {
     p96_state *s = (p96_state *)h;
-    return s && s->fmt == P96_FMT_RGB565;
+    return s && (s->fmt == P96_FMT_RGB565 || s->fmt == P96_FMT_RGB565PC);
 }
 
 static void p96_show_rgb565(void *h, const unsigned char *pix, int w, int hh,
@@ -969,6 +1055,32 @@ static void p96_show_rgb565(void *h, const unsigned char *pix, int w, int hh,
                             mr_display_service_fn service, void *service_opaque)
 {
     p96_show_packed(h, pix, w, hh, stride, dy0, dy1, P96_SRC_RGB565,
+                    service, service_opaque);
+}
+
+/* The screen's own layout as an MR_PIX_* value, for the layouts a
+ * converting decoder can write; RGBFB_R5G6B5 and RGBFB_A8R8G8B8 have none. */
+static int p96_native_format(void *h)
+{
+    p96_state *s = (p96_state *)h;
+    if (!s) return -1;
+    switch (s->fmt) {
+    case P96_FMT_BGR24:    return MR_PIX_BGR24;
+    case P96_FMT_RGB24:    return MR_PIX_RGB24;
+    case P96_FMT_BGRA32:   return MR_PIX_BGRA32;
+    case P96_FMT_RGB565PC: return MR_PIX_RGB565LE;
+    default:               return -1;
+    }
+}
+
+static void p96_show_native(void *h, int fmt, const unsigned char *pix, int w,
+                            int hh, int stride, int dy0, int dy1,
+                            mr_display_service_fn service, void *service_opaque)
+{
+    int src_kind = fmt == MR_PIX_BGR24    ? P96_SRC_BGR24 :
+                   fmt == MR_PIX_BGRA32   ? P96_SRC_BGRA32 :
+                   fmt == MR_PIX_RGB565LE ? P96_SRC_RGB565LE : P96_SRC_RGB24;
+    p96_show_packed(h, pix, w, hh, stride, dy0, dy1, src_kind,
                     service, service_opaque);
 }
 
@@ -1141,7 +1253,9 @@ const display_backend backend_p96 = {
     .status = p96_status,
     .wait_mask = p96_wait_mask,
     .toggle_fullscreen = p96_toggle_fullscreen,
-    .present_size = p96_present_size
+    .present_size = p96_present_size,
+    .native_format = p96_native_format,
+    .show_native = p96_show_native
     /* supports_indexed/show_indexed/supports_yuv_indexed left NULL - RTG
      * backends don't implement the AGA-only indexed fast paths. */
 };
