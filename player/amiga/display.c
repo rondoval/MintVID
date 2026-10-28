@@ -43,6 +43,7 @@ int g_aga_ehb = 0;
 int g_aga_copper_vdouble = 0;
 int g_display_want_time = 0;  /* enable RTG geometry diagnostics (--time)   */
 int g_display_fullscreen = 0;
+int g_display_truecolour = 0;
 
 void display_set_force_aga(int on) { g_force_aga = on; }
 void display_set_force_p96(int on) { g_force_p96 = on; }
@@ -76,6 +77,7 @@ void display_set_copper_vdouble(int on) {
 }
 void display_set_timing_mode(int on) { g_display_want_time = on ? 1 : 0; }
 void display_set_fullscreen(int on) { g_display_fullscreen = on ? 1 : 0; }
+void display_set_truecolour(int on) { g_display_truecolour = on ? 1 : 0; }
 
 struct amiga_display {
     const display_backend *be;

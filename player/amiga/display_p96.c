@@ -24,7 +24,9 @@
  * at the faster path. p96_open_private_screen() tries depths in that same
  * 16/24/32 preference order (p96_depth_preference[]), so the fastest
  * (lowest-bandwidth) supported mode is picked first, not merely the first
- * one that happens to work. Widening to more RGBFTYPEs is a matter of
+ * one that happens to work. When a hardware decoder writes the pixels
+ * (display_set_truecolour()) it tries the true-colour layouts that decoder
+ * writes as they are first, then 32/24/16. Widening to more RGBFTYPEs is a matter of
  * adding another p96_fmt case + swizzle in write_pixel_strip(), not a
  * structural change.
  *
@@ -197,56 +199,87 @@ static int p96_close_private_screen(struct Screen **screen, const char *reason)
 
 /* Depths this backend can write directly, fastest (least RTG memory
  * traffic) first - matches display_cgx.c's own "prefer 16-bit" reasoning
- * for its private screen, and p96_fmt's ordering above. A mode existing at
+ * for its private screen - or deepest first with display_set_truecolour()
+ * (p96_truecolour_preference[]). A mode existing at
  * one of these depths does not by itself guarantee a supported RGBFB
  * layout (a "16-bit" mode could be RGBFB_R5G5B5, a "32-bit" one
  * RGBFB_A8B8G8R8, etc.) - p96_open_private_screen() verifies the real
  * format via detect_bitmap_format() before accepting a mode, and falls
  * through to the next depth if it does not match. */
 static const ULONG p96_depth_preference[] = { 16, 24, 32 };
+static const ULONG p96_truecolour_preference[] = { 32, 24, 16 };
+
+/* With display_set_truecolour(), the 8-bit-per-channel layouts a converting
+ * decoder writes as they are (p96_native_format()) come first, the 32-bit
+ * one ahead; the depth order after them still reaches RGBFB_A8R8G8B8, which
+ * the 68k repacks. Picked by layout, not depth: VideoCore.card files its
+ * 1920x1080 RGBFB_B8G8R8A8 mode under depth 24. */
+static const ULONG p96_truecolour_layouts[] = {
+    RGBFB_B8G8R8A8, RGBFB_R8G8B8, RGBFB_B8G8R8
+};
+
+static int p96_mode_has_layout(ULONG modeid, void *layout)
+{
+    return p96GetModeIDAttr(modeid, P96IDA_RGBFORMAT) == *(ULONG *)layout;
+}
+
+/* Open a private screen in modeid; NULL unless its bitmap is in a layout
+ * this backend writes. A mode's depth alone doesn't guarantee that - verify
+ * the real format on the screen we actually got, the same check
+ * open()/p96_rebuild_geometry() rely on. */
+static struct Screen *p96_try_screen(ULONG modeid, ULONG depth,
+                                     const char *title)
+{
+    struct Screen *scr = OpenScreenTags(NULL,
+        SA_DisplayID, modeid,
+        SA_Depth, depth,
+        SA_Type, CUSTOMSCREEN,
+        SA_Title, (ULONG)(title ? title : "MintVID"),
+        SA_Quiet, TRUE,
+        SA_ShowTitle, FALSE,
+        SA_Draggable, FALSE,
+        TAG_END);
+    if (scr && (GetCyberMapAttr(scr->RastPort.BitMap, CYBRMATTR_DEPTH) <= 8 ||
+                detect_bitmap_format(scr->RastPort.BitMap) == P96_FMT_NONE)) {
+        CloseScreen(scr);
+        scr = NULL;
+    }
+    return scr;
+}
 
 static struct Screen *p96_open_private_screen(p96_state *s, const char *title)
 {
     struct Screen *scr = NULL;
+    const ULONG *depths = g_display_truecolour ? p96_truecolour_preference
+                                               : p96_depth_preference;
     unsigned i;
 
-    /* Try each depth in p96_depth_preference[] order (fastest/lowest-
-     * bandwidth first): a mode existing at a given depth does not by itself
-     * guarantee an RGBFB layout this backend knows how to write (a "16-bit"
-     * mode could be RGBFB_R5G5B5, a "32-bit" one RGBFB_A8B8G8R8, etc, all
-     * unsupported - see detect_bitmap_format()) - so a rejected depth falls
-     * through to the next one down the same list, rather than giving up on
-     * a private screen entirely and losing the fast path to backend_cgx's
-     * WritePixelArray. */
-    for (i = 0; i < sizeof p96_depth_preference / sizeof p96_depth_preference[0];
-        i++) {
+    if (g_display_truecolour) {
+        for (i = 0; !scr && i < sizeof p96_truecolour_layouts /
+                                sizeof p96_truecolour_layouts[0]; i++) {
+            ULONG layout = p96_truecolour_layouts[i], depth = 0;
+            ULONG modeid = mr_rtg_best_mode_where(s->source_w, s->source_h,
+                                                  p96_mode_has_layout, &layout,
+                                                  &depth);
+            if (modeid != (ULONG)INVALID_ID)
+                scr = p96_try_screen(modeid, depth, title);
+        }
+    }
+
+    /* Try each depth in that order: a mode existing at a given depth does
+     * not by itself guarantee an RGBFB layout this backend knows how to
+     * write (a "16-bit" mode could be RGBFB_R5G5B5, a "32-bit" one
+     * RGBFB_A8B8G8R8, etc, all unsupported - see detect_bitmap_format()) -
+     * so a rejected depth falls through to the next one down the same list,
+     * rather than giving up on a private screen entirely and losing the fast
+     * path to backend_cgx's WritePixelArray. */
+    for (i = 0; !scr && i < sizeof p96_depth_preference /
+                            sizeof p96_depth_preference[0]; i++) {
         ULONG depth = 0;
         ULONG modeid = mr_rtg_best_mode_for_source(s->source_w, s->source_h,
-                                                    p96_depth_preference[i],
-                                                    &depth);
-        if (modeid == (ULONG)INVALID_ID) continue;
-
-        scr = OpenScreenTags(NULL,
-            SA_DisplayID, modeid,
-            SA_Depth, depth,
-            SA_Type, CUSTOMSCREEN,
-            SA_Title, (ULONG)(title ? title : "MintVID"),
-            SA_Quiet, TRUE,
-            SA_ShowTitle, FALSE,
-            SA_Draggable, FALSE,
-            TAG_END);
-        if (!scr) continue;
-
-        /* Depth alone doesn't guarantee a layout this backend knows how to
-         * write - verify the real format on the screen we actually got,
-         * the same check open()/p96_rebuild_geometry() rely on. */
-        if (GetCyberMapAttr(scr->RastPort.BitMap, CYBRMATTR_DEPTH) <= 8 ||
-            detect_bitmap_format(scr->RastPort.BitMap) == P96_FMT_NONE) {
-            CloseScreen(scr);
-            scr = NULL;
-            continue;
-        }
-        break;
+                                                    depths[i], &depth);
+        if (modeid != (ULONG)INVALID_ID)
+            scr = p96_try_screen(modeid, depth, title);
     }
     if (scr && g_display_want_time)
         printf("p96-fullscreen private=%dx%d depth=%lu source=%dx%d "

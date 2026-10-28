@@ -165,6 +165,12 @@ void display_set_copper_vdouble(int on);
  * Must be called before display_open() to capture init diagnostics. */
 void display_set_timing_mode(int on);
 void display_set_fullscreen(int on);
+/* RTG private screens normally try 16-bit modes first, for the least memory
+ * traffic when the 68k writes every pixel. With this set they try 32-bit,
+ * then 24-bit, then 16-bit: for a decoder that converts on other hardware,
+ * where the deeper screen costs the 68k nothing but a longer row copy.
+ * Call before display_open(). */
+void display_set_truecolour(int on);
 
 /* Accumulated AGA encode / blit time in ms (0 if the AGA backend wasn't used). */
 void display_aga_timing(unsigned long *enc_ms, unsigned long *blit_ms);

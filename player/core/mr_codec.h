@@ -73,6 +73,8 @@ const mr_codec *mr_codec_find(uint32_t fourcc);
 const mr_codec *mr_codec_find_next(uint32_t fourcc, const mr_codec *after);
 /* 0 hides the hardware decoders from the two calls above (--no-videocore). */
 void            mr_codec_set_hw_enabled(int enabled);
+/* 1 when codec is one of the hardware decoders. */
+int             mr_codec_is_hw(const mr_codec *codec);
 
 mr_status mr_decoder_open(mr_decoder *dec, const mr_codec *codec,
                           int width, int height);

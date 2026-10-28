@@ -38,4 +38,13 @@
 ULONG mr_rtg_best_mode_for_source(int source_w, int source_h, ULONG depth,
                                   ULONG *depth_out);
 
+/*
+ * The same policy over every CyberGraphX mode `accept` takes, whatever depth
+ * it reports: for a caller that wants a pixel layout rather than a depth
+ * (some boards file a 32-bit layout under depth 24). INVALID_ID when none.
+ */
+ULONG mr_rtg_best_mode_where(int source_w, int source_h,
+                             int (*accept)(ULONG modeid, void *ctx),
+                             void *ctx, ULONG *depth_out);
+
 #endif /* MR_RTG_MODE_PICK_H */

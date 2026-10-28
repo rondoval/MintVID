@@ -188,14 +188,17 @@ static int cgx_close_private_screen(struct Screen **screen, const char *reason)
  * ~120 ms blit. Nothing about that gap was P96-specific: it was purely this
  * function always asking for public-screen-sized real estate instead of
  * video-sized real estate. A 16-bit mode is still preferred first to reduce
- * RTG memory traffic; unavailable falls through to 32-bit then 24-bit. */
+ * RTG memory traffic; unavailable falls through to 32-bit then 24-bit.
+ * display_set_truecolour() turns that round: 32-bit, then 24, then 16. */
 static struct Screen *cgx_open_private_screen(cgx_state *s, const char *title)
 {
-    static const ULONG depths[] = { 16, 32, 24 };
+    static const ULONG fast_depths[] = { 16, 32, 24 };
+    static const ULONG deep_depths[] = { 32, 24, 16 };
+    const ULONG *depths = g_display_truecolour ? deep_depths : fast_depths;
     struct Screen *scr = NULL;
     unsigned i;
 
-    for (i = 0; i < sizeof depths / sizeof depths[0]; i++) {
+    for (i = 0; i < sizeof fast_depths / sizeof fast_depths[0]; i++) {
         ULONG depth = 0;
         ULONG modeid = mr_rtg_best_mode_for_source(s->source_w, s->source_h,
                                                     depths[i], &depth);

@@ -2861,6 +2861,9 @@ int main(int argc, char **argv)
      * full size and plays normally. */
     int rtg_half_active = rtg_half && codec == &mr_codec_h264 &&
                           vi->width >= 4 && vi->height >= 4;
+    /* A hardware decoder writes the screen's rows itself, so the 68k pays
+     * nothing for a deeper screen but a longer row copy: take the colours. */
+    display_set_truecolour(mr_codec_is_hw(codec));
     disp = display_open(rtg_half_active ? vi->width / 2 : vi->width,
                         rtg_half_active ? vi->height / 2 : vi->height,
                         "MintVID");

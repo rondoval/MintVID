@@ -60,6 +60,15 @@ void mr_codec_set_hw_enabled(int enabled)
     g_hw_enabled = enabled != 0;
 }
 
+int mr_codec_is_hw(const mr_codec *codec)
+{
+    size_t i;
+    for (i = 0; codec && g_hw_codecs[i]; i++)
+        if (g_hw_codecs[i] == codec)
+            return 1;
+    return 0;
+}
+
 static int codec_claims(const mr_codec *c, uint32_t want)
 {
     size_t j;

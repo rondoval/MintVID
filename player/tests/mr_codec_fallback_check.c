@@ -67,6 +67,8 @@ int main(void)
     CHECK(mr_codec_find_next(avc1, &mr_codec_h264) == NULL);
     CHECK(mr_codec_find(mjpg) == &mr_codec_vc_mjpeg);
     CHECK(mr_codec_find_next(mjpg, &mr_codec_vc_mjpeg) == &mr_codec_mjpeg);
+    CHECK(mr_codec_is_hw(&mr_codec_vc_h264) && mr_codec_is_hw(&mr_codec_vc_mjpeg));
+    CHECK(!mr_codec_is_hw(&mr_codec_h264) && !mr_codec_is_hw(NULL));
     mr_codec_set_hw_enabled(0);
     CHECK(mr_codec_find(avc1) == &mr_codec_h264);
     CHECK(mr_codec_find(mjpg) == &mr_codec_mjpeg);
