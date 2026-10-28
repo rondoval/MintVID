@@ -30,7 +30,7 @@ hardware:
 |------|---------|---------|
 | Floor | 68030+ accelerated ECS/AGA | No SIMD and limited integer throughput. Lightweight codecs, modest frame sizes and efficient chipset conversion matter most. |
 | Mid | 68040/060, AGA or RTG | Older codecs become increasingly practical, but modern H.264 streaming remains well below real time on classic CPUs. A tested 68060 using AGA has managed roughly 7 fps at best at the lowest YouTube/IPTV resolutions. |
-| Moon | PiStorm / Emu68 | An ARM runs the 68k. Use the MintVID040 build; heavier codecs become physically practical, with results depending on the host Pi, display path and stream. |
+| Moon | PiStorm / Emu68 | An ARM runs the 68k. Use the MintVID040 build; heavier codecs become physically practical, with results depending on the host Pi, display path and stream. With a Pi 4 or CM4 the Pi's VPU decodes H.264 and MJPEG itself (`videocodec.library`). |
 | Unverified | Vampire / Apollo 68080 | Not yet validated by the MintVID project. No optimised release build is officially recommended yet. |
 
 Design consequence: **codec choice is a tier, not a fixed decision.** The
@@ -60,6 +60,16 @@ the CPU, which usually means an older, decode-cheap codec.
   `avc1`, avcC setup, CABAC, B-frames and display reordering are implemented;
   exact performance depends strongly on resolution, stream complexity,
   display path and hardware.
+- **Hardware decoders** — on a PiStorm with a Pi 4 or CM4, the Pi's
+  VideoCore VPU decodes H.264 and MJPEG through `videocodec.library`
+  (`player/amiga/mr_vc.c`). They sit first in the registry
+  (`mr_codec_find_next()`); their `open()` declines what the hardware cannot
+  take, and the software decoder for the same fourcc follows.
+  `core/mr_hwdec.c` presents the asynchronous hardware as an ordinary
+  `mr_codec`, and `mr_decoder_set_output()` asks it for the screen's own
+  pixel format at the size the display shows the picture
+  (`display_native_format()`, `display_present_size()`), so the 68k only
+  copies rows.
 
 Container: **AVI** (RIFF) and **QuickTime MOV** are both implemented behind one
 auto-detecting front end (`mr_demux.h`), so the player is container-blind —
@@ -209,6 +219,13 @@ mean-absolute-error of **~0.13/255** (last-LSB YUV→RGB rounding).
       AC-3/general audio quality is confirmed good on real hardware.
 - [x] Moon-shot heavier codec, gated to PiStorm-class practical streaming:
       delivered as H.264/AVC above
+- [x] VideoCore decoding on a PiStorm (Pi 4, CM4): H.264 and MJPEG on
+      the Pi's VPU through `videocodec.library`, scaled and converted to the
+      P96 screen's own layout (`mr_hwdec.c`, `mr_avc.c`, `mr_vc.c`); 1080p30
+      full screen on a Pi 4, with software fallback for what the VPU declines
+- [ ] Zero-copy display: the VPU writing straight into the P96 screen, which
+      `videocodec.library` can do; the row copy left is ~5-7 ms per 1080p
+      frame
 ```
 
 ## Legacy codec compatibility policy

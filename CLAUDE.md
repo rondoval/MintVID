@@ -6049,3 +6049,44 @@ Table footprint against the real 060's 8 KB data cache:
   R+G+B, and a frame touches only part of them.
 
 Not yet timed on real hardware.
+
+## VideoCore decoding (PiStorm)
+
+- `videocodec.library` (emu68-driver-stack) is opened at run time
+  (`OpenLibrary(..., 0)`, revision 3 or later); its headers are vendored in
+  `amiga/include` (BSD-3). Only mrplay is built with `MR_HAVE_VIDEOCORE`; the
+  GUIs only probe the library (`mr_videocore.h`) to show the checkbox.
+- The hardware decoders (`mr_codec_vc_h264`, `mr_codec_vc_mjpeg`) come first
+  in the registry. Their `open()` must decline whatever the VPU would get
+  wrong, because the firmware does not refuse it: past 2032 pixels across,
+  past 8192 macroblocks, High 10, 4:2:2 (`mr_h264_sps_fits()`). mrplay then
+  opens the next decoder for the fourcc (`mr_codec_find_next()`).
+- `core/mr_hwdec.c` turns the asynchronous hardware into an `mr_codec`:
+  `MR_EAGAIN` while the pipeline fills, pictures handed out in the order the
+  hardware returns them with their own pts, no more pictures held than leave
+  the hardware one to write into (the oldest is given back after 100 ms
+  without an input buffer), failed after 2 s. avcC/AVCC input is rewritten
+  to Annex-B, with SPS/PPS in front of the first unit after every open and
+  reset. It is host-tested against a fake backend (`mr_hwdec_check`).
+- Output: `mr_decoder_set_output()` asks for a pixel format and size. A
+  session must be opened with an output format and size
+  (`VCA_OutputFormat`/`Width`/`Height` and `VCA_DestRect`), or it has no ISP
+  and can never change format. The ISP's rows are whole 32 pixels (64 for
+  I420); `VCF_RGB16` is little-endian (`MR_PIX_RGB565LE`).
+- mrplay asks for the screen's own layout (`display_native_format()`) at the
+  size the display shows the picture (`display_present_size()`), so P96 only
+  copies rows. A big-endian 16-bit screen gets YUV420P on the RGB565 route,
+  an A8R8G8B8 one BGR24 that the display repacks.
+- With a hardware decoder open, mrplay calls `display_set_truecolour(1)`: P96
+  picks its private screen by layout before depth (B8G8R8A8, then R8G8B8 and
+  B8G8R8), because VideoCore.card files its 1920x1080 B8G8R8A8 mode under
+  depth 24. Software decoding keeps the 16-bit-first order.
+- Measuring with `--time` distorts this path. mrplay's stdout is unbuffered,
+  and the periodic stats report alone cost ~250 ms every 3 s on a Pi 4. The TS
+  demuxer's timing calls `clock()` about five times per 188-byte packet,
+  ~54 ms per 1080p frame, enough to keep 1080p MPEG-TS in audio rescue for
+  good. Without `--time`, 1080p TS and MP4 play at their full rate. To
+  measure real frame rates, buffer stdout fully in a test build.
+- Known limits: a VPU error in mid-stream stops playback rather than
+  switching to software; `--loop` loses the pictures still in flight at the
+  end of each pass.

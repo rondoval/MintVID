@@ -190,7 +190,9 @@ mode:
     plays with VQ Turbo and the RTG (Half) display mode, through CGX since
     the PiStorm's RTG has no P96 overlay. Faster PiStorm hardware should
     provide more headroom, but exact results depend on the stream and
-    configuration.
+    configuration. With a Raspberry Pi 4 or CM4 and the Emu68
+    VideoCore stack, H.264 and Motion-JPEG decode on the Pi's VPU instead -
+    see @{" Supported formats " LINK Formats}.
   - Vampire/Apollo 68080 - not yet validated by the MintVID project. No
     optimised build is officially recommended yet, and the MintVID060
     build should not be assumed to be correct solely from the CPU name.
@@ -483,6 +485,13 @@ change one setting at a time. The following are sensible starting points:
       the older direct-write P96 path on its own if a board doesn't support
       it, so there is nothing separate to select.
 
+  @{u}PiStorm with a Pi 4 or CM4 and the VideoCore stack@{uu}
+    Build: MintVID040
+    Display: P96 (Fullscreen); the VPU decodes H.264 and Motion-JPEG and
+             writes the screen's own pixels, 1080p included
+    VideoCore decoding: on (the default)
+    Video: All Frames
+
   @{u}PiStorm/Emu68@{uu}
     Build: MintVID040
     Display: RTG (Half) for YouTube 360p (tested on a Pi3-based PiStorm
@@ -734,6 +743,7 @@ Every GUI is a front end over mrplay, which also runs directly:
   mrplay --hls-max-width=640 --hls-max-height=360 \
     "https://www.youtube.com/watch?v=LIVE_STREAM_ID"
   mrplay --fast-buffer=8 "DH0:Videos/movie.avi"
+  mrplay --no-videocore "DH0:Videos/movie.mp4"
   mrplay --net-queue=24 --live-resync \
     "https://example.net/live/master.m3u8"
   mrplay --p96 "DH0:Videos/movie.avi"
@@ -785,6 +795,21 @@ MintVID uses a modular decoder architecture rather than being tied to one
 fixed format, so the supported codec list can continue to grow. It is not
 a video editor or encoder: use ffmpeg or similar on a modern machine to
 prepare source material, then play the result on the Amiga.
+
+@{b}VideoCore decoding@{ub}: on a PiStorm with a Raspberry Pi 4 or CM4,
+H.264 (Baseline, Main and High profile, 8-bit 4:2:0, up to 2032 pixels
+across) and Motion-JPEG are decoded on the Pi's VPU through
+videocodec.library, which also scales each picture and converts it to the
+screen's own pixel format. Anything the VPU cannot take plays in software
+as before. It needs the VideoCore stack from emu68-driver-stack
+(vchiq.device, videocodec.library, videocore.codec) on Emu68 1.1 with the
+cma overlay; its VCInfo command checks the setup. P96 (Fullscreen) is the
+fast display: while the VPU decodes, MintVID opens a 32- or 24-bit screen
+when one is available, which at 1080p needs 32 MiB of RTG memory
+(dtoverlay=videocore,mem=32 in the Pi's config.txt). It is on whenever
+videocodec.library is installed; the @{b}VideoCore decoding@{ub} checkbox or
+--no-videocore turns it off. If the VPU fails in the middle of a stream,
+playback stops rather than switching to software.
 
 For the detailed per-FourCC breakdown see
 @{" Codec support list " LINK CodecList}.

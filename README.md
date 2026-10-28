@@ -168,7 +168,10 @@ For a repeatable real-hardware baseline, see **[68060 @ 50 MHz codec performance
   targeted for the Emu68/PiStorm environment. H.264 becomes much more practical;
   on a tested Pi3-based PiStorm 600, YouTube's 360p stream plays with VQ Turbo
   and RTG (Half). Faster PiStorm hardware should provide more headroom, but
-  results still depend on the source and configuration.
+  results still depend on the source and configuration. With a Raspberry
+  Pi 4 or CM4 and the Emu68 VideoCore stack installed, H.264 and
+  MJPEG are decoded on the Pi's VPU instead: see
+  [VideoCore decoding on a PiStorm](#videocore-decoding-on-a-pistorm).
 - **Vampire/Apollo 68080:** currently unvalidated by the MintVID project. No
   optimised build is officially recommended yet, and the 68060 build should not
   be assumed to be the right choice solely from the CPU name.
@@ -178,6 +181,37 @@ player (Stephen Fellner, László Török, Henryk Richter). RiVA's assembly sour
 was studied for ideas during design but was never built on or shipped as part
 of MintVID, so it is not carried in this tree — see the original RiVA release
 on Aminet for that source and its own GPL-2.0/dual GPL-MIT licensing.
+
+### VideoCore decoding on a PiStorm
+
+On a PiStorm with a Raspberry Pi 4 or CM4, mrplay can hand H.264 and
+MJPEG to the Pi's VideoCore VPU through `videocodec.library`. The VPU also
+scales each picture to the size it is shown at and converts it to the
+screen's own pixel format, so the 68k only copies rows: on a Pi 4, 1080p
+H.264 plays full screen at its full 30 fps, with about 1 ms of 68k time per
+frame spent on decoding.
+
+- **What it decodes:** H.264 Baseline, Main and High profile, 8-bit 4:2:0,
+  up to 2032 pixels across (`avc1` in MP4/MOV, MKV and MPEG-TS/HLS), and
+  MJPEG in AVI. The VPU declines anything else (High 10, 4:2:2, wider
+  pictures) and the software decoder plays it as before; mrplay prints which
+  decoder it used.
+- **What it needs:** the VideoCore stack from
+  [emu68-driver-stack](https://github.com/rondoval/emu68-driver-stack)
+  (`vchiq.device`, `videocodec.library` and `videocore.codec`) on Emu68 1.1
+  with the `cma` overlay. Its `VCInfo` command checks the setup.
+- **Display:** RTG (P96) full screen is the fast path. While the VPU
+  decodes, MintVID opens a true-colour screen (32-bit B8G8R8A8 first, then
+  24-bit) and falls back to 16-bit only when none opens. A 1080p screen at
+  24 or 32 bits needs 32 MiB of RTG memory (`dtoverlay=videocore,mem=32` in
+  the Pi's `config.txt`). In a CGX window the VPU decodes too, and the
+  window scales as usual.
+- **Switching it off:** it is on whenever `videocodec.library` opens. The
+  **VideoCore decoding** checkbox in both controllers (shown only when the
+  library is installed) or `--no-videocore` turns it off.
+- **Limits:** if the VPU fails in the middle of a stream, playback stops
+  with a message rather than switching to software. With `--loop`, the last
+  few pictures of each pass can be lost.
 
 ## Status
 
@@ -203,6 +237,7 @@ on Aminet for that source and its own GPL-2.0/dual GPL-MIT licensing.
 | Raw MJPEG + raw MPEG-4 Visual streams | ✅ |
 | DV (IEC 61834/SMPTE 314M) — PAL 4:2:0 and NTSC/DVCPRO 4:1:1 | ✅ native decoder (libdv-derived); ffmpeg-validated; Quality/Fast (DC-only, ~1.9x) speed modes |
 | Amiga RTG / AGA output | ✅ |
+| VideoCore decoding (PiStorm, `videocodec.library`) | ✅ H.264 and MJPEG on the Raspberry Pi's VPU, scaled and converted to the screen's format; software fallback; hardware-validated on a Pi 4 |
 | ReAction + GadTools controllers | ✅ matching file, IPTV and YouTube frontends for modern and OS 3.0 systems |
 | IPTV directory core | ✅ bounded iptv-org JSON/M3U parsing, joining and local filters |
 | PCM / MP2 / MP3 / AAC-LC / AC-3 audio to Paula | ✅ host-validated; MP2 covers MPEG-1 and MPEG-2 Layer II (16 kHz upwards) and MP3 all three Layer III versions including MPEG-2.5 (8/11.025/12 kHz); AC-3 uses fixed-point stereo downmix. AC-3 and .mpg MP2 are checked against ffmpeg's own decode (`mr_ac3_check`, `mr_mp2_check`), on the host and on m68k |
@@ -304,6 +339,7 @@ mrplay --user-agent "Mozilla/5.0" --referer "https://example.net/" \
 mrplay --hls-max-width=640 --hls-max-height=360 \
   "https://www.youtube.com/watch?v=LIVE_STREAM_ID"
 mrplay --fast-buffer=8 "DH0:Videos/movie.avi"
+mrplay --no-videocore "DH0:Videos/movie.mp4"
 ```
 
 Plain HTTP is present in the normal Amiga build. HTTPS uses
@@ -494,6 +530,13 @@ Akiko selection is preserved. The chooser is disabled for CGX. Play starts the
 selected movie, Pause toggles playback, Stop exits it, and Fast forward toggles
 unpaced decode.
 
+**VideoCore decoding**
+
+On a PiStorm with the VideoCore stack, the **VideoCore decoding** checkbox
+(shown only when `videocodec.library` is installed, on by default) lets the
+Pi's VPU decode H.264 and MJPEG; clear it (`--no-videocore`) to decode on the
+68k. See [VideoCore decoding on a PiStorm](#videocore-decoding-on-a-pistorm).
+
 **Audio controls**
 
 The **Audio** chooser picks the Paula output rate (Normal, or Low to halve it
@@ -652,7 +695,8 @@ should show a meaningful downward trend across completed open/close cycles.
 DESIGN.md            architecture & roadmap
 player/core/         portable C core: demux + video decoders
 player/audio/        packet adapter for MP2, MintAMP MP3/AAC and fixed AC-3
-player/amiga/        RTG/AGA display, Paula output and player frontend
+player/amiga/        RTG/AGA display, Paula output, VideoCore decoding and
+                     player frontend
 player/tests/        host test harness + fixtures
 player/vendor/       pinned/vendored build dependencies
 ```

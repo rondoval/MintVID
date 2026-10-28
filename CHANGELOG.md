@@ -1,5 +1,29 @@
 # MintVID changelog
 
+## Unreleased
+
+### Added
+
+- **VideoCore decoding on a PiStorm.** With a Raspberry Pi 4 or CM4 and
+  the VideoCore stack (`videocodec.library`), H.264 (8-bit 4:2:0
+  Baseline, Main and High profile, up to 2032 pixels across) and MJPEG are
+  decoded on the Pi's VPU. The VPU also scales each picture and converts it
+  to the screen's own pixel format, so on a Pi 4 1080p plays full screen at
+  its full 30 fps with **P96 (Fullscreen)**. Anything the VPU cannot take
+  plays in software as before. It is on whenever the library is installed;
+  the new **VideoCore decoding** checkbox in both controllers, or
+  `--no-videocore`, turns it off. Saved controller settings are reset once
+  by this update.
+- **More P96 screen formats.** P96 (Fullscreen) also opens 16-bit
+  little-endian, 24-bit RGB and 32-bit BGRA screens, the formats of a
+  Raspberry Pi's VideoCore.card. At 1080p on a PiStorm it used to fall back
+  to a CGX window scaled on the 68k.
+
+### Fixed
+
+- Reconnecting to a live stream reopened the video decoder with codec data
+  from the stream it had just closed.
+
 ## 1.4.1 - 2026-10-08
 
 ### Fixed

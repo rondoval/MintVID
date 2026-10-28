@@ -132,7 +132,9 @@ practical playback performance depend on the hardware underneath it.
     Pi3-based PiStorm 600, YouTube's 360p stream plays with VQ Turbo and
     the RTG (Half) display mode, through CGX since the PiStorm's RTG has
     no P96 overlay. Faster PiStorm hardware should provide more headroom,
-    but exact results depend on the stream and configuration.
+    but exact results depend on the stream and configuration. With a
+    Raspberry Pi 4 or CM4 and the Emu68 VideoCore stack, H.264 and
+    Motion-JPEG decode on the Pi's VPU instead (see below).
   - Vampire/Apollo 68080 - not yet validated by the MintVID project, so no
     optimised build is officially recommended yet. Do not assume the 68060
     build is the correct choice solely from the CPU name; feedback from real
@@ -148,6 +150,13 @@ WHAT IT PLAYS
     MPEG-4 Part 2 (ISO ASP and Microsoft MP42/DIV2), Windows Media Video 7
     (WMV1), Windows Media Video 8 (WMV2), H.264/AVC Baseline/Main/High
     Profile, and DV (IEC 61834/SMPTE 314M, PAL 4:2:0 and NTSC/DVCPRO 4:1:1).
+  - VideoCore decoding on a PiStorm with a Raspberry Pi 4 or CM4:
+    H.264 (8-bit 4:2:0 Baseline/Main/High, up to 2032 pixels across) and
+    Motion-JPEG decode on the Pi's VPU through videocodec.library, which
+    also scales and converts each picture for the screen; 1080p plays full
+    screen at 30 fps on a Pi 4 with P96 (Fullscreen). It needs the VideoCore
+    stack from emu68-driver-stack; other streams play in software. On by
+    default; the VideoCore decoding checkbox or --no-videocore turns it off.
   - Audio to Paula in stereo: PCM, MP2, MP3, AAC-LC (raw/ADTS/LATM), and
     fixed-point AC-3 (stereo downmix). MP3/AAC decoding reuses the proven
     MintAMP/Helix code.
