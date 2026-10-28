@@ -352,9 +352,13 @@ static int fixture(const char *path, const char *ref_path)
         fail = 1;
     }
     for (;;) {
-        mr_status st = kind == 1 ? mr_mov_next_packet(&mov, &pkt) :
-                       kind == 2 ? mr_mkv_next_packet(&mkv, &pkt) :
-                                   mr_ts_next_packet(&ts, &pkt);
+        mr_status st;
+        /* The demuxers set only what they carry (MPEG-TS alone sets
+         * is_annexb); mr_demux_next_packet() clears the rest first. */
+        memset(&pkt, 0, sizeof pkt);
+        st = kind == 1 ? mr_mov_next_packet(&mov, &pkt) :
+             kind == 2 ? mr_mkv_next_packet(&mkv, &pkt) :
+                         mr_ts_next_packet(&ts, &pkt);
         if (st != MR_OK) break;
         if (!pkt.is_video) continue;
         if (pkt.is_annexb) {
