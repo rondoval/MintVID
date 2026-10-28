@@ -226,9 +226,6 @@ mean-absolute-error of **~0.13/255** (last-LSB YUV→RGB rounding).
       the Pi's VPU through `videocodec.library`, scaled and converted to the
       P96 screen's own layout (`mr_hwdec.c`, `mr_avc.c`, `mr_vc.c`); 1080p30
       full screen on a Pi 4, with software fallback for what the VPU declines
-- [ ] Zero-copy display: the VPU writing straight into the P96 screen, which
-      `videocodec.library` can do; the row copy left is ~5-7 ms per 1080p
-      frame
 ```
 
 ## Legacy codec compatibility policy
