@@ -53,6 +53,7 @@
 #include "mr_master_options.h"
 #include "mr_akiko.h"
 #include "mr_videocore.h"
+#include "mr_ahi.h"
 #include "mr_gui_menu.h"
 #include "mr_last_dir.h"
 #include "mr_player_status.h"
@@ -111,7 +112,8 @@ enum {
     G_VOLUME,
     G_PLAYLIST,
     G_SKIP_AFTER,
-    G_VIDEOCORE
+    G_VIDEOCORE,
+    G_AUDIO_OUT
 };
 
 /* Chooser rows are chipset-dependent, so never infer a display mode from a
@@ -142,6 +144,12 @@ static ULONG skip_after_row(unsigned ms)
  * row of its own, only when videocodec.library opens - otherwise there is
  * nothing to switch and the window stays as it was. */
 static Object *g_videocore;
+/* "Audio output" chooser (--audio-out=, --ahi-unit=): created, on a row of
+ * its own, only when ahi.device opens - otherwise Paula is the only output
+ * and the window stays as it was. Row i plays to audio_out_values[i]. */
+static Object *g_audio_out;
+static mr_audio_output audio_out_values[1 + MR_AUDIO_OUT_AHI_UNITS];
+static unsigned audio_out_count;
 static mr_c2p_mode c2p_values[5];
 static unsigned c2p_count;
 static int add_chooser_node(struct List *list, const char *text);
@@ -422,6 +430,12 @@ static void read_play_options(Object *mode, Object *c2p, Object *h264,
         ULONG checked_videocore = 1;
         GetAttr(CHECKBOX_Checked, g_videocore, &checked_videocore);
         options->no_videocore = checked_videocore == 0;
+    }
+    if (g_audio_out) {
+        ULONG row = 0;
+        GetAttr(CHOOSER_Selected, g_audio_out, &row);
+        options->audio_out = row < audio_out_count ? audio_out_values[row]
+                                                   : MR_AUDIO_OUT_PAULA;
     }
     /* Video rows are fixed, like Scale: 0=All Frames (throughput on), 1=Skip
      * Frames (throughput off) - see where video_modes is built in main().
@@ -1351,7 +1365,9 @@ int main(void)
     struct List scale_modes;
     struct List skip_after_modes;
     Object *skip_after_label;
-    Object *controls_videocore;
+    struct List audio_out_modes;
+    Object *audio_out_label;
+    Object *controls_extra;
     struct List audio_rate_modes;
     struct List fast_buffer_modes;
     struct List video_modes;
@@ -1370,6 +1386,7 @@ int main(void)
     ULONG initial_c2p, initial_h264, initial_laced, initial_scale;
     ULONG initial_audio_rate, initial_fast_buffer, initial_no_audio;
     ULONG initial_mono_audio, initial_video_mode, initial_skip_after;
+    ULONG initial_audio_out;
 
     window_object = NULL;
     timermask = 0;
@@ -1436,7 +1453,13 @@ int main(void)
     skip_after_label = NULL;
     g_skip_after = NULL;
     g_videocore = NULL;
-    controls_videocore = NULL;
+    audio_out_modes.lh_Head = (struct Node *)&audio_out_modes.lh_Tail;
+    audio_out_modes.lh_Tail = NULL;
+    audio_out_modes.lh_TailPred = (struct Node *)&audio_out_modes.lh_Head;
+    audio_out_label = NULL;
+    controls_extra = NULL;
+    g_audio_out = NULL;
+    audio_out_count = 0;
     audio_rate_modes.lh_Head = (struct Node *)&audio_rate_modes.lh_Tail;
     audio_rate_modes.lh_Tail = NULL;
     audio_rate_modes.lh_TailPred = (struct Node *)&audio_rate_modes.lh_Head;
@@ -1545,6 +1568,16 @@ int main(void)
     if (!add_chooser_node(&audio_rate_modes, "Normal") ||
         !add_chooser_node(&audio_rate_modes, "Low"))
         goto cleanup;
+    if (mr_ahi_available()) {
+        mr_audio_output out;
+        for (out = MR_AUDIO_OUT_PAULA;
+             out < MR_AUDIO_OUT_AHI0 + MR_AUDIO_OUT_AHI_UNITS;
+             out = (mr_audio_output)(out + 1)) {
+            if (!add_chooser_node(&audio_out_modes, mr_audio_output_name(out)))
+                goto cleanup;
+            audio_out_values[audio_out_count++] = out;
+        }
+    }
     if (!add_chooser_node(&fast_buffer_modes, "Auto") ||
         !add_chooser_node(&fast_buffer_modes, "Off") ||
         !add_chooser_node(&fast_buffer_modes, "4 MB") ||
@@ -1609,6 +1642,13 @@ int main(void)
     initial_skip_after = skip_after_row(have_saved_options
                                         ? saved_options.skip_trigger_ms
                                         : MR_SKIP_TRIGGER_DEFAULT_MS);
+    initial_audio_out = 0;
+    if (have_saved_options) {
+        ULONG row;
+        for (row = 0; row < audio_out_count; row++)
+            if (audio_out_values[row] == saved_options.audio_out)
+                initial_audio_out = row;
+    }
 
     /* Seed the embedded file requester's starting drawer from the last one
      * used, saved via mr_last_dir_save() in update_file_info() below.
@@ -1711,6 +1751,19 @@ int main(void)
     skip_after_label = (Object *)NewObject(LABEL_GetClass(), NULL,
                                            LABEL_Text, (ULONG)"Skip after",
                                            TAG_DONE);
+    if (audio_out_count) {
+        g_audio_out = (Object *)NewObject(CHOOSER_GetClass(), NULL,
+                                          GA_ID, G_AUDIO_OUT,
+                                          GA_RelVerify, TRUE,
+                                          CHOOSER_Labels, (ULONG)&audio_out_modes,
+                                          CHOOSER_Selected, initial_audio_out,
+                                          TAG_DONE);
+        audio_out_label = (Object *)NewObject(LABEL_GetClass(), NULL,
+                                              LABEL_Text, (ULONG)"Audio output",
+                                              TAG_DONE);
+        if (!g_audio_out || !audio_out_label)
+            goto cleanup;
+    }
     if (mr_videocore_available()) {
         g_videocore = (Object *)NewObject(CHECKBOX_GetClass(), NULL,
                                           GA_ID, G_VIDEOCORE,
@@ -1809,19 +1862,30 @@ int main(void)
     if (!controls_bottom)
         goto cleanup;
 
-    /* A third row rather than squeezing the full second one past 640
-     * pixels, at its natural width on the left. */
-    if (g_videocore) {
-        controls_videocore = (Object *)NewObject(LAYOUT_GetClass(), NULL,
-                                                 LAYOUT_Orientation,
-                                                 LAYOUT_ORIENT_HORIZ,
-                                                 LAYOUT_HorizAlignment,
-                                                 LALIGN_LEFT,
-                                                 LAYOUT_AddChild,
-                                                 (ULONG)g_videocore,
-                                                 CHILD_WeightedWidth, 0,
-                                                 TAG_DONE);
-        if (!controls_videocore)
+    /* Audio output and VideoCore decoding get a third row rather than
+     * squeezing the full second one past 640 pixels, at their natural
+     * widths on the left; each is there only when its hardware is. */
+    if (g_audio_out || g_videocore) {
+        controls_extra = (Object *)NewObject(LAYOUT_GetClass(), NULL,
+                                             LAYOUT_Orientation,
+                                             LAYOUT_ORIENT_HORIZ,
+                                             LAYOUT_HorizAlignment, LALIGN_LEFT,
+                                             LAYOUT_SpaceInner, TRUE,
+                                             g_audio_out ? LAYOUT_AddChild
+                                                         : TAG_IGNORE,
+                                             (ULONG)g_audio_out,
+                                             g_audio_out ? CHILD_Label
+                                                         : TAG_IGNORE,
+                                             (ULONG)audio_out_label,
+                                             g_audio_out ? CHILD_WeightedWidth
+                                                         : TAG_IGNORE, 0,
+                                             g_videocore ? LAYOUT_AddChild
+                                                         : TAG_IGNORE,
+                                             (ULONG)g_videocore,
+                                             g_videocore ? CHILD_WeightedWidth
+                                                         : TAG_IGNORE, 0,
+                                             TAG_DONE);
+        if (!controls_extra)
             goto cleanup;
     }
 
@@ -1832,9 +1896,8 @@ int main(void)
                                     CHILD_WeightedHeight, 0,
                                     LAYOUT_AddChild, (ULONG)controls_bottom,
                                     CHILD_WeightedHeight, 0,
-                                    controls_videocore ? LAYOUT_AddChild
-                                                       : TAG_IGNORE,
-                                    (ULONG)controls_videocore,
+                                    controls_extra ? LAYOUT_AddChild : TAG_IGNORE,
+                                    (ULONG)controls_extra,
                                     CHILD_WeightedHeight, 0,
                                     TAG_DONE);
     if (!controls)
@@ -2070,6 +2133,7 @@ int main(void)
                 case G_MONO_AUDIO:
                 case G_SKIP_AFTER:
                 case G_VIDEOCORE:
+                case G_AUDIO_OUT:
                     publish_play_options(master_options, mode, c2p, h264,
                                          lace, scale, audio_rate, fast_buffer,
                                          no_audio, mono_audio, video_mode);
@@ -2185,8 +2249,13 @@ cleanup:
                 if (g_skip_after) DisposeObject(g_skip_after);
                 if (skip_after_label) DisposeObject(skip_after_label);
             }
-            if (controls_videocore) DisposeObject(controls_videocore);
-            else if (g_videocore) DisposeObject(g_videocore);
+            if (controls_extra) {
+                DisposeObject(controls_extra);
+            } else {
+                if (g_audio_out) DisposeObject(g_audio_out);
+                if (audio_out_label) DisposeObject(audio_out_label);
+                if (g_videocore) DisposeObject(g_videocore);
+            }
         }
 
         if (buttons) {
@@ -2226,8 +2295,10 @@ cleanup:
     free_chooser_nodes(&fast_buffer_modes);
     free_chooser_nodes(&video_modes);
     free_chooser_nodes(&skip_after_modes);
+    free_chooser_nodes(&audio_out_modes);
     g_skip_after = NULL;
     g_videocore = NULL;
+    g_audio_out = NULL;
     close_reaction_classes();
     return status;
 }

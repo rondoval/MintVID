@@ -136,7 +136,7 @@ when playback is already smooth or every decoded picture matters. See the
 A codec-agnostic video player for 68k AmigaOS — built in the spirit of
 MintAMP (the libhelix audio player): a small, portable C core with thin
 Amiga-specific layers. MP3/AAC decoding reuses the proven MintAMP/Helix code,
-with audio output through Paula.
+with audio output through Paula or AHI.
 
 The goal is to go **beyond MPEG-1** on accelerated 68k Amigas — from
 68030-class OCS/ECS/AGA systems through 68040/060 machines to PiStorm/RTG.
@@ -240,7 +240,8 @@ frame spent on decoding.
 | VideoCore decoding (PiStorm, `videocodec.library`) | ✅ H.264 and MJPEG on the Raspberry Pi's VPU, scaled and converted to the screen's format; software fallback; hardware-validated on a Pi 4 |
 | ReAction + GadTools controllers | ✅ matching file, IPTV and YouTube frontends for modern and OS 3.0 systems |
 | IPTV directory core | ✅ bounded iptv-org JSON/M3U parsing, joining and local filters |
-| PCM / MP2 / MP3 / AAC-LC / AC-3 audio to Paula | ✅ host-validated; MP2 covers MPEG-1 and MPEG-2 Layer II (16 kHz upwards) and MP3 all three Layer III versions including MPEG-2.5 (8/11.025/12 kHz); AC-3 uses fixed-point stereo downmix. AC-3 and .mpg MP2 are checked against ffmpeg's own decode (`mr_ac3_check`, `mr_mp2_check`), on the host and on m68k |
+| PCM / MP2 / MP3 / AAC-LC / AC-3 audio to Paula or AHI | ✅ host-validated; MP2 covers MPEG-1 and MPEG-2 Layer II (16 kHz upwards) and MP3 all three Layer III versions including MPEG-2.5 (8/11.025/12 kHz); AC-3 uses fixed-point stereo downmix. AC-3 and .mpg MP2 are checked against ffmpeg's own decode (`mr_ac3_check`, `mr_mp2_check`), on the host and on m68k |
+| AHI output (`--audio-out=ahi`, `--ahi-unit=N`) | ✅ any AHI card and unit, at the source's own sample rate; falls back to Paula when the unit cannot be opened |
 | Mono decode (`--audio-mono`) | ✅ decoder-side for MP3/MP2/AC-3, post-decode for AAC; host-validated against the stereo decode |
 
 ## Building & testing the portable core (dev host)
@@ -340,6 +341,7 @@ mrplay --hls-max-width=640 --hls-max-height=360 \
   "https://www.youtube.com/watch?v=LIVE_STREAM_ID"
 mrplay --fast-buffer=8 "DH0:Videos/movie.avi"
 mrplay --no-videocore "DH0:Videos/movie.mp4"
+mrplay --audio-out=ahi --ahi-unit=1 "DH0:Videos/movie.mp4"
 ```
 
 Plain HTTP is present in the normal Amiga build. HTTPS uses
@@ -478,7 +480,7 @@ resolver and HTTPS/AmiSSL support.
 Selecting a result and pressing **Channel videos** follows its bounded channel
 ID to the public channel `/videos` page and lists that channel's uploads. The
 transport row controls the separate player process: Play first cleanly replaces
-the current video, Pause and Fast toggle their modes, Vol -/+ adjusts Paula in
+the current video, Pause and Fast toggle their modes, Vol -/+ adjusts the volume in
 steps, Fullscreen toggles the RTG window, and Stop exits the player.
 Double-clicking a result plays it directly, without a separate Play press.
 
@@ -539,10 +541,16 @@ Pi's VPU decode H.264 and MJPEG; clear it (`--no-videocore`) to decode on the
 
 **Audio controls**
 
-The **Audio** chooser picks the Paula output rate (Normal, or Low to halve it
-again), **No audio** skips the decoder and Paula entirely, and **Mono audio**
-(`--audio-mono`) asks the codec for one channel instead of two. Paula plays
-stereo through a synchronized left/right channel pair; in mono the one decoded
+**Audio output** (listed when AHI is installed) picks Paula or one of AHI's
+four units (`--audio-out=ahi --ahi-unit=N`); a unit plays on whichever card
+and mode AHI's preferences give it. AHI plays the source's own sample rate, so
+44.1 and 48 kHz sound is not halved as it is for Paula. If the unit cannot be
+opened, mrplay plays through Paula instead.
+
+The **Audio** chooser picks the output rate (Normal, or Low to halve it
+again), **No audio** skips the audio decoder and output entirely, and **Mono
+audio** (`--audio-mono`) asks the codec for one channel instead of two. Paula
+plays stereo through a synchronized left/right channel pair; in mono the one decoded
 channel plays on both speakers. MP3, MP2 and AC-3 then skip roughly half of
 their per-channel synthesis. Helix AAC has no mono mode, so an AAC track only
 saves the downmix. Worth a try when a heavy H.264 stream is starving the audio
@@ -596,7 +604,7 @@ at a time for local QuickTime MOV/MP4 files, landing on the nearest keyframe
 via the sample index rather than pretending that fast decode is a seek
 operation. AVI, MKV and network/live sources don't have a keyframe index yet
 and keep cursor-right as the fast-forward toggle instead. Cursor up/down adjust
-Paula's volume in the same 8/64 steps as ytgui's **Vol -**/**Vol +** buttons.
+the volume in the same 8/64 steps as ytgui's **Vol -**/**Vol +** buttons.
 
 Every GUI has a **MintVID** title-bar menu with **Guide...** (opens
 [`MintVID.guide`](MintVID.guide) via AmigaGuide, with full in-app help and a
@@ -695,7 +703,7 @@ should show a meaningful downward trend across completed open/close cycles.
 DESIGN.md            architecture & roadmap
 player/core/         portable C core: demux + video decoders
 player/audio/        packet adapter for MP2, MintAMP MP3/AAC and fixed AC-3
-player/amiga/        RTG/AGA display, Paula output, VideoCore decoding and
+player/amiga/        RTG/AGA display, Paula/AHI output, VideoCore decoding and
                      player frontend
 player/tests/        host test harness + fixtures
 player/vendor/       pinned/vendored build dependencies
