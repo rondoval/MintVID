@@ -41,6 +41,7 @@ static struct Library *VideoCodecBase;
 #define VC_REVISION   3             /* videocodec.library 0.3, the first   */
 #define VC_INPUTS     4
 #define VC_INPUT_SIZE (256 * 1024)
+#define VC_SPS_MAX    256           /* an SPS that long is passed at the open */
 #define VC_OUTPUTS    8
 
 typedef struct {
@@ -253,10 +254,12 @@ static mr_status vc_open(mr_decoder *dec, ULONG codec)
     ULONG row, rows;
     vc_backend *vc;
     LONG err = 0;
+    const uint8_t *nal = NULL;
+    uint32_t nal_len = 0;
+    UBYTE header[3 + VC_SPS_MAX];
+    ULONG header_len = 0;
 
     if (codec == VCC_H264) {
-        const uint8_t *nal;
-        uint32_t nal_len;
         mr_h264_sps sps;
         if (mr_avcc_first_sps(dec->config, dec->config_len, &nal, &nal_len)
                 != MR_OK ||
@@ -268,6 +271,15 @@ static mr_status vc_open(mr_decoder *dec, ULONG codec)
                    sps.bit_depth_luma, sps.chroma_format_idc, sps.width,
                    sps.height);
             return MR_EUNSUPPORTED;
+        }
+        /* In Annex-B: the library holds it against the VPU's free memory at
+         * the open, so a stream with no room there comes to software. */
+        if (nal_len <= VC_SPS_MAX) {
+            header[0] = 0;
+            header[1] = 0;
+            header[2] = 1;
+            memcpy(header + 3, nal, nal_len);
+            header_len = 3 + nal_len;
         }
     }
     VideoCodecBase = OpenLibrary((CONST_STRPTR)VIDEOCODEC_NAME, 0);
@@ -324,9 +336,13 @@ static mr_status vc_open(mr_decoder *dec, ULONG codec)
                                VCA_OutputWidth, row,
                                VCA_OutputHeight, rows,
                                VCA_DestRect, (ULONG)&dest,
+                               header_len ? VCA_Extradata : TAG_IGNORE,
+                               (ULONG)header,
+                               header_len ? VCA_ExtradataSize : TAG_IGNORE,
+                               header_len,
                                TAG_DONE);
     if (!vc->s) {
-        /* No VPU (cma or gpu_mem not set up), or it is busy or gone. */
+        /* No VPU (cma or gpu_mem not set up), or it is busy, gone or full. */
         printf("videocore: no decoder session (%ld)\n", (long)err);
         vc_close(vc);
         return MR_EUNSUPPORTED;
