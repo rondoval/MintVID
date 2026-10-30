@@ -4976,6 +4976,15 @@ int main(int argc, char **argv)
                             }
                         }
 drain_decoded_output:
+                        /* A hardware decoder hands its pictures over in
+                         * bursts, a whole copy each: show the one that is due
+                         * between them rather than after the burst. */
+                        if (playback_started && mr_codec_is_hw(codec)) {
+                            int released = presenter.released;
+                            presenter.released = 1;
+                            present_service_frame(&presenter);
+                            presenter.released = released;
+                        }
                         decoded_index++;
                         first_decoded_output = 0;
                         decode_status = mr_decoder_drain(&dec);

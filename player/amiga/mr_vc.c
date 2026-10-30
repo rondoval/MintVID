@@ -41,7 +41,7 @@ static struct Library *VideoCodecBase;
 #define VC_REVISION   3             /* videocodec.library 0.3, the first   */
 #define VC_INPUTS     4
 #define VC_INPUT_SIZE (256 * 1024)
-#define VC_OUTPUTS    4
+#define VC_OUTPUTS    8
 
 typedef struct {
     struct VCSession   *s;
