@@ -207,6 +207,9 @@ typedef long long VCTime; /* a timestamp in microseconds */
 #define VCF_YUYV 9   /* packed 4:2:2: Y U Y V [RGBFB_Y4U2V2] */
 #define VCF_UYVY 10  /* packed 4:2:2: U Y V Y */
 
+/* A format's bit in VCCodecInfo.Formats, as RGBFF_ is to RGBFB_ */
+#define VCF_MASK(f) (1UL << (f))
+
 /* H.264 profiles (VCA_Profile) */
 #define VCP_Default 0
 #define VCP_H264_Baseline 1
@@ -282,9 +285,9 @@ struct VCFrame
 	ULONG Width;        /* pixels per row of the buffer */
 	ULONG Height;       /* rows of the buffer */
 	struct VCRect Crop; /* the visible picture */
-	ULONG Planes;       /* 1 to 3 */
-	ULONG Offset[3];    /* of each plane, from Data */
-	ULONG Pitch[3];     /* bytes per row of each plane */
+	ULONG Planes;       /* 1 to 4 */
+	ULONG Offset[4];    /* of each plane, from Data */
+	ULONG Pitch[4];     /* bytes per row of each plane */
 	VCTime Pts;         /* presentation time, or VC_TIME_UNKNOWN */
 	ULONG Flags;        /* VCFF_* */
 	APTR UserData;      /* yours; the library never touches it */
@@ -342,8 +345,7 @@ struct VCCodecInfo
 	/* the largest 16:9 picture; a decoder may take other shapes of the same area */
 	ULONG MaxWidth, MaxHeight;
 	ULONG MaxLevel;    /* H.264 level times ten (42 = 4.2): the highest it keeps up with at the level's rates; 0 unknown */
-	ULONG NumFormats;  /* used entries of Formats[] */
-	ULONG Formats[16]; /* VCF_*: what a decoder or converter writes, what an encoder reads */
+	ULONG Formats;     /* VCF_MASK() of each VCF_* a decoder or converter writes, an encoder reads */
 	UBYTE Backend[32]; /* the backend's name, for VCA_Backend */
 	LONG Priority;     /* 50 hardware, 0 software (VCB_PRIORITY_*): the row of the highest gets the session */
 	ULONG Flags;       /* VCCF_*: what the row serves */
@@ -353,21 +355,32 @@ struct VCCodecInfo
 #define VCCF_Session (1UL << 0) /* sessions (VC_OpenSession*()) */
 #define VCCF_Image (1UL << 1)   /* the image calls (VC_DecodeImage(), VC_EncodeImage(), VC_ConvertImage()) */
 
-/* A backend's state and counters: call VC_GetBackendInfo() with index 0, 1, 2 and so on until it fails */
+/* One of a backend's own counters (VCInfo.Counters): the backend names it and documents what it counts */
+struct VCCounter
+{
+	UBYTE Name[32]; /* lowercase letters, digits and _: "stray" */
+	ULONG Value;
+};
+
+/*
+ * A backend's state and counters: call VC_GetBackendInfo() with index 0, 1,
+ * 2 and so on until it fails.  For the counters, point Counters at room for
+ * MaxCounters of them; NumCounters says how many the backend has, so more
+ * than were written means the room was short.
+ */
 struct VCInfo
 {
 	ULONG Size;       /* set it to sizeof(struct VCInfo) before the call */
 	ULONG ABIVersion; /* of the backend interface */
 	UBYTE Backend[32];
-	ULONG Sessions;                   /* open now */
-	ULONG VersionMajor, VersionMinor; /* the hardware's own interface, while one is open */
-	ULONG Events;                     /* messages the hardware sent */
-	ULONG EventsDropped;              /* messages lost for lack of room: should stay 0 */
-	ULONG BuffersBack;                /* buffers the hardware returned */
-	ULONG Stray;                      /* replies nobody waited for: should stay 0 */
-	ULONG Codecs;                     /* rows of this backend's codec table (VC_QueryCodec() merges them all) */
-	ULONG MemTotal;                   /* bytes of the hardware's own memory its codecs allocate from, 0 unknown (Pi: gpu_mem's codec heap) */
-	ULONG MemFree;                    /* of that, free now: a 1080p decoder takes about 45 MB on the Pi */
+	ULONG Sessions;             /* open now */
+	UBYTE Interface[32];        /* the hardware's own interface and its version while one is open ("MMAL 0.2"), else empty */
+	struct VCCounter *Counters; /* in: room for MaxCounters, or NULL */
+	ULONG MaxCounters;          /* in: its length */
+	ULONG NumCounters;          /* out: how many the backend has, for diagnostics; at most MaxCounters were written */
+	ULONG Codecs;               /* rows of this backend's codec table (VC_QueryCodec() merges them all) */
+	ULONG MemTotal;             /* bytes of the hardware's own memory its codecs allocate from, 0 unknown */
+	ULONG MemFree;              /* of that, free now */
 };
 
 /*
@@ -443,8 +456,8 @@ struct VCSession; /* opaque */
 
 /* Decoder */
 #define VCA_Framed (VCA_Base + 20)        /* BOOL: each packet holds whole pictures, marked VCPF_FrameStart/End [FALSE: any chunks] */
-#define VCA_Extradata (VCA_Base + 29)     /* APTR: codec configuration (H.264 SPS/PPS) when not in the stream */
-#define VCA_ExtradataSize (VCA_Base + 30) /* its bytes, at most 128 */
+#define VCA_Extradata (VCA_Base + 29)     /* APTR: codec configuration (H.264 SPS/PPS) when not in the stream; read by the open only */
+#define VCA_ExtradataSize (VCA_Base + 30) /* its bytes */
 
 /* Encoder (VCA_Bitrate and VCA_RequestKeyFrame also with VC_SetAttrsTags() while running) */
 #define VCA_FrameRateNum (VCA_Base + 21)    /* frame rate of the input; a framed decoder assumes it too [unknown] */
