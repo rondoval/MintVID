@@ -34,6 +34,7 @@
 #include <string.h>
 
 #include "../iptv/mr_iptv.h" /* MR_IPTV_PLAYER_PORT */
+#include "../core/mr_play_options.h" /* MR_AUDIO_VOLUME_* */
 
 #define MR_PLAYER_STATUS_MAGIC 0x4D525653UL /* 'MRVS' */
 #define MR_PLAYER_STATUS_FILE "T:MintVID.player-status"
@@ -85,7 +86,7 @@ mr_player_status_snapshot_valid(const mr_player_status_snapshot *snapshot) {
 typedef struct {
   struct MsgPort port;
   volatile ULONG commands;
-  volatile ULONG volume; /* Paula volume, 0..64, for absolute GUI updates */
+  volatile ULONG volume; /* 0..MR_AUDIO_VOLUME_MAX, for absolute GUI updates */
   mr_player_status status;
 } mr_player_control_port;
 
@@ -137,8 +138,8 @@ static inline void mr_player_status_set(mr_player_control_port *block,
 static inline int mr_player_control_set_volume(ULONG volume) {
   mr_player_control_port *block;
   int sent = 0;
-  if (volume > 64)
-    volume = 64;
+  if (volume > MR_AUDIO_VOLUME_MAX)
+    volume = MR_AUDIO_VOLUME_MAX;
   Forbid();
   block = (mr_player_control_port *)FindPort((CONST_STRPTR)MR_IPTV_PLAYER_PORT);
   if (block && block->status.magic == MR_PLAYER_STATUS_MAGIC) {

@@ -44,11 +44,15 @@ uint64_t audio_now_us(void)
 mr_audio *audio_open(mr_audio_output out, unsigned rate, int channels,
                      int bits)
 {
+    mr_audio *a;
     if (out >= MR_AUDIO_OUT_AHI0 &&
         out < MR_AUDIO_OUT_AHI0 + MR_AUDIO_OUT_AHI_UNITS)
-        return ahi_audio_open((int)(out - MR_AUDIO_OUT_AHI0), rate, channels,
-                              bits);
-    return paula_audio_open(rate, channels, bits);
+        a = ahi_audio_open((int)(out - MR_AUDIO_OUT_AHI0), rate, channels,
+                           bits);
+    else
+        a = paula_audio_open(rate, channels, bits);
+    if (a) mr_limiter_init(&a->boost, rate);
+    return a;
 }
 
 const char *audio_name(mr_audio *a)
@@ -66,10 +70,24 @@ void audio_write(mr_audio *a, const unsigned char *pcm, unsigned bytes)
     if (a && pcm) a->ops->write(a, pcm, bytes);
 }
 
+/* Above 100% the PCM goes through the limiter in chunks of a->boosted. */
 void audio_write_s16(mr_audio *a, const short *pcm,
                      unsigned frames, int channels)
 {
-    if (a && pcm && channels >= 1) a->ops->write_s16(a, pcm, frames, channels);
+    unsigned chunk;
+    if (!a || !pcm || channels < 1) return;
+    chunk = MR_AUDIO_BOOST_SHORTS / (unsigned)channels;
+    if (!mr_limiter_active(&a->boost) || !chunk) {
+        a->ops->write_s16(a, pcm, frames, channels);
+        return;
+    }
+    while (frames) {
+        unsigned n = frames < chunk ? frames : chunk;
+        mr_limiter_run(&a->boost, a->boosted, pcm, n, channels);
+        a->ops->write_s16(a, a->boosted, n, channels);
+        pcm += (size_t)n * (unsigned)channels;
+        frames -= n;
+    }
 }
 
 void audio_service(mr_audio *a)
@@ -124,7 +142,12 @@ void audio_set_running(mr_audio *a, int running)
 
 void audio_set_volume(mr_audio *a, int volume)
 {
-    if (a) a->ops->set_volume(a, volume);
+    if (!a) return;
+    if (volume < 0) volume = 0;
+    if (volume > MR_AUDIO_VOLUME_MAX) volume = MR_AUDIO_VOLUME_MAX;
+    a->ops->set_volume(a, volume < MR_AUDIO_VOLUME_FULL ? volume
+                                                        : MR_AUDIO_VOLUME_FULL);
+    mr_limiter_set_gain(&a->boost, (unsigned)volume, MR_AUDIO_VOLUME_FULL);
 }
 
 void audio_flush(mr_audio *a)

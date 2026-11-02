@@ -119,6 +119,12 @@ typedef enum {
  * card and mode AHI's preferences give that unit. AHI plays the source's own
  * rate (it resamples itself), so it is not held to Paula's ~28kHz ceiling.
  * Values are appended only, so saved settings keep their meaning. */
+/* Volume levels, in 64ths: MR_AUDIO_VOLUME_FULL plays the PCM as it is,
+ * above it mrplay amplifies it itself, with a limiter (audio/mr_limiter.h).
+ * --volume= gives the level in percent. */
+#define MR_AUDIO_VOLUME_FULL 64     /* 100% */
+#define MR_AUDIO_VOLUME_MAX  256    /* 400%, +12 dB */
+
 typedef enum {
     MR_AUDIO_OUT_PAULA = 0,
     MR_AUDIO_OUT_AHI0,
@@ -196,6 +202,8 @@ typedef struct mr_play_options {
     int no_videocore;
     /* --audio-out=paula|ahi, --ahi-unit=N: see mr_audio_output. */
     mr_audio_output audio_out;
+    /* --volume=: the level a session starts at, 0..MR_AUDIO_VOLUME_MAX. */
+    unsigned volume;
 } mr_play_options;
 
 /* The display modes that play through an RTG window rather than a native
@@ -235,6 +243,9 @@ int mr_path_is_audio_only(const char *path);
  * value. --ahi-unit implies AHI; --audio-out=ahi keeps a unit already chosen
  * (unit 0 if none), so the two can come in either order. */
 int mr_parse_audio_output(const char *arg, mr_audio_output *out);
+/* --volume=0..400 (percent), for every parser that takes it: 1 = taken into
+ * *level (0..MR_AUDIO_VOLUME_MAX), 0 = not --volume=, -1 = bad value. */
+int mr_parse_volume(const char *arg, unsigned *level);
 /* "Paula" or "AHI unit N", as the GUIs list them. */
 const char *mr_audio_output_name(mr_audio_output out);
 

@@ -28,6 +28,14 @@
   The list only appears when ahi.device is installed, Paula stays the
   default, and mrplay plays through Paula when the chosen unit cannot
   be opened. Saved controller settings are reset once by this update.
+- **Volume up to 400%.** The volume slider, Vol +/- and the cursor keys go
+  past 100%: above it mrplay amplifies the sound itself, by up to four times
+  (+12 dB), and a limiter holds loud passages back instead of letting them
+  clip. Films are often mixed much quieter than music, and AHI plays a
+  stereo stream at half level, 6 dB below full scale. The controller now
+  saves its volume slider with its other settings and starts each file at
+  that level, where it used to start every file at 100% whatever the
+  slider showed (`--volume=0..400`, in percent).
 
 ### Fixed
 

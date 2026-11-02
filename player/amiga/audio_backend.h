@@ -10,6 +10,7 @@
 #define MR_AUDIO_BACKEND_H
 
 #include "mr_audio.h"
+#include "../audio/mr_limiter.h"
 
 typedef struct mr_audio_ops {
     const char   *(*name)(mr_audio *a);
@@ -28,8 +29,14 @@ typedef struct mr_audio_ops {
     void          (*flush)(mr_audio *a);
 } mr_audio_ops;
 
+/* audio_write_s16()'s buffer for boosted PCM, in shorts. */
+#define MR_AUDIO_BOOST_SHORTS 1024
+
+/* The backend allocates it zeroed and sets ops; audio.c owns the rest. */
 struct mr_audio {
     const mr_audio_ops *ops;
+    mr_limiter boost;                       /* volume above 100% */
+    short boosted[MR_AUDIO_BOOST_SHORTS];   /* audio_write_s16()'s output */
 };
 
 /* audio_set_timing_mode()'s flag, read by every backend's worker. */

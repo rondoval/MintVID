@@ -72,6 +72,7 @@ void mr_play_options_default(mr_play_options *o)
      * passed unless something built the command line through this file. */
     o->throughput = 1;
     o->skip_trigger_ms = MR_SKIP_TRIGGER_DEFAULT_MS;
+    o->volume = MR_AUDIO_VOLUME_FULL;
 }
 
 int mr_display_is_rtg(mr_display_mode display)
@@ -318,6 +319,16 @@ static int append_playback_flags(char *out, size_t cap,
             if (!append_option(out, cap, "--audio-out=ahi") ||
                 !append_option(out, cap, unit)) return 0;
         }
+        /* Only when it differs, so a 100% session's command line is as
+         * before. */
+        if (o->volume != MR_AUDIO_VOLUME_FULL) {
+            unsigned level = o->volume < MR_AUDIO_VOLUME_MAX
+                           ? o->volume : MR_AUDIO_VOLUME_MAX;
+            snprintf(number, sizeof(number), "--volume=%u",
+                     (level * 100 + MR_AUDIO_VOLUME_FULL / 2) /
+                     MR_AUDIO_VOLUME_FULL);
+            if (!append_option(out, cap, number)) return 0;
+        }
     }
     /* Always explicit, like --fast-buffer= above: a GUI-launched session's
      * choice (the "Video: All Frames / Skip Frames" control) should always
@@ -499,6 +510,9 @@ int mr_play_options_parse(mr_play_options *o, int argc, char **argv,
         else if ((taken = mr_parse_audio_output(arg, &o->audio_out)) != 0) {
             if (taken < 0) goto bad;
         }
+        else if ((taken = mr_parse_volume(arg, &o->volume)) != 0) {
+            if (taken < 0) goto bad;
+        }
         else if (!strcmp(arg, "--no-audio")) o->no_audio = 1;
         else if (!strcmp(arg, "--no-video")) o->no_video = 1;
         else if (!strcmp(arg, "--audio-mono")) o->mono_audio = 1;
@@ -568,6 +582,18 @@ int mr_parse_audio_output(const char *arg, mr_audio_output *out)
         return 1;
     }
     return 0;
+}
+
+int mr_parse_volume(const char *arg, unsigned *level)
+{
+    unsigned percent;
+    if (strncmp(arg, "--volume=", 9)) return 0;
+    if (!parse_uint(arg + 9, &percent) ||
+        percent > MR_AUDIO_VOLUME_MAX * 100 / MR_AUDIO_VOLUME_FULL)
+        return -1;
+    /* Rounded both ways, so every level survives a percent round trip. */
+    *level = (percent * MR_AUDIO_VOLUME_FULL + 50) / 100;
+    return 1;
 }
 
 const char *mr_audio_output_name(mr_audio_output out)

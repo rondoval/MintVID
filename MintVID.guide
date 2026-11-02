@@ -296,7 +296,8 @@ HAM's colour smear at sharp edges does not change. HAM encoding costs about
   Pause         toggles playback
   Stop          exits the player
   Fast forward  toggles unpaced decode
-  Volume -/+     adjusts Paula volume in 8/64 steps
+  Volume         0 to 400%, 100% a quarter of the way along (see
+                 Audio output settings)
   Playlist       opens the playlist window
 
 The playlist window supports Add, Remove, Clear and Play, plus Load M3U
@@ -349,8 +350,8 @@ Cursor left/right seek 10 seconds at a time for local QuickTime MOV/MP4
 files, landing on the nearest keyframe via the sample index - a real seek,
 not a fast-decode approximation. AVI, MKV, and network/live sources don't
 have a keyframe index yet, so cursor-right stays the fast-forward toggle
-for those instead. Cursor up/down adjust Paula's volume, the same 8/64
-steps as ytgui's Vol -/Vol + buttons.
+for those instead. Cursor up/down adjust the volume (0 to 400%) in the
+same 8/64 steps as ytgui's Vol -/Vol + buttons.
 
 @{b}Playhead@{ub}
 
@@ -683,6 +684,14 @@ above what Paula can play, or Audio is Low, AAC is decoded directly at
 the lower rate with a smaller transform instead of decoding at full rate
 and dropping samples.
 
+The volume goes from 0 to 400%. Up to 100% the output sets it; above
+that mrplay amplifies the sound itself, by up to four times (+12 dB), and
+a limiter holds loud passages back instead of letting them clip. That
+helps with films, which are often mixed much quieter than music, and
+with AHI, which plays a stereo stream at half level (6 dB down). The
+controller's volume slider is saved with its other settings, and each
+file starts at its level (--volume=0..400, in percent).
+
 MintAMP/Helix decode MP3, AAC-LC and fixed-point AC-3; MPEG-1/2 Layer II
 (MP2) audio decodes through the same pl_mpeg path used for MPEG video. PCM
 is also supported directly.
@@ -757,6 +766,7 @@ Every GUI is a front end over mrplay, which also runs directly:
   mrplay --aga-window-half "DH0:Videos/clip.mp4"
   mrplay --no-video "DH0:Videos/concert.mp4"
   mrplay --audio-out=ahi --ahi-unit=1 "DH0:Videos/movie.mp4"
+  mrplay --volume=250 "DH0:Videos/film.mkv"
   mrplay --tls=1.3 "https://example.net/live/master.m3u8"
 
 mrplay carries a $STACK:320000 AmigaOS stack cookie because libavc needs

@@ -402,6 +402,8 @@ static void read_options(gt_app *app, mr_play_options *options)
                                  ? skip_after_ms[row]
                                  : MR_SKIP_TRIGGER_DEFAULT_MS;
     }
+    if (app->volume)
+        options->volume = gad_value(app, app->volume, GTSL_Level);
     mr_saved_options_save(options);
 }
 
@@ -1042,7 +1044,8 @@ static struct Gadget *add_gadget(gt_app *app, struct Gadget *previous,
 }
 
 static struct Gadget *add_slider(gt_app *app, struct Gadget *previous,
-                                 UWORD id, int x, int y, int w, int h)
+                                 UWORD id, int x, int y, int w, int h,
+                                 ULONG level)
 {
     struct NewGadget ng;
     memset(&ng, 0, sizeof(ng));
@@ -1055,7 +1058,8 @@ static struct Gadget *add_slider(gt_app *app, struct Gadget *previous,
     ng.ng_GadgetID = id;
     ng.ng_VisualInfo = app->visual;
     return CreateGadget(SLIDER_KIND, previous, &ng,
-                        GTSL_Min, 0, GTSL_Max, 64, GTSL_Level, 64,
+                        GTSL_Min, 0, GTSL_Max, MR_AUDIO_VOLUME_MAX,
+                        GTSL_Level, level,
                         TAG_DONE);
 }
 
@@ -1070,6 +1074,7 @@ static int build_window(gt_app *app)
     ULONG initial_audio_rate, initial_fast_buffer, initial_no_audio;
     ULONG initial_mono_audio, initial_video_mode, initial_skip_after;
     ULONG initial_audio_out;
+    ULONG initial_volume;
 
     app->screen = LockPubScreen(NULL);
     if (!app->screen)
@@ -1222,6 +1227,9 @@ static int build_window(gt_app *app)
         }
         app->audio_out_labels[app->audio_out_count] = NULL;
     }
+    initial_volume = have_saved_options &&
+                     saved_options.volume <= MR_AUDIO_VOLUME_MAX
+                   ? saved_options.volume : MR_AUDIO_VOLUME_FULL;
     initial_audio_out = 0;
     if (have_saved_options) {
         ULONG row;
@@ -1305,7 +1313,8 @@ static int build_window(gt_app *app)
                    TAG_IGNORE, 0);
     g = add_gadget(app, g, BUTTON_KIND, G_FAST, 116, 116, 40, 18, ">>",
                    TAG_IGNORE, 0);
-    app->volume = g = add_slider(app, g, G_VOLUME, 166, 116, 150, 18);
+    app->volume = g = add_slider(app, g, G_VOLUME, 166, 116, 150, 18,
+                                 initial_volume);
     if (!app->volume)
         return 0;
 
@@ -1446,11 +1455,12 @@ int main(void)
                 case G_STOP: stop_player(); break;
                 case G_FAST: signal_player(SIGBREAKF_CTRL_E); break;
                 case G_VOLUME: {
-                    ULONG level = 64;
+                    ULONG level = MR_AUDIO_VOLUME_FULL;
                     if (app.volume)
                         GT_GetGadgetAttrs(app.volume, app.window, NULL,
                                           GTSL_Level, (ULONG)&level, TAG_DONE);
                     mr_player_control_set_volume(level);
+                    publish_options(&app);
                     break;
                 }
                 case G_PLAYLIST:

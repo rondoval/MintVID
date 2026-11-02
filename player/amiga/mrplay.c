@@ -263,7 +263,7 @@ struct Device *TimerBase;
  * back the codec that is playing, or why a stream refused to play. */
 static mr_player_control_port *control_block;
 static mr_audio *control_audio;
-static int control_volume = 64;
+static int control_volume = MR_AUDIO_VOLUME_FULL;
 static int deferred_player_event;
 /* Set once, first thing in main(). service_player_during_io() checks this
  * to refuse to touch display/audio/queue state when called from any task
@@ -1667,10 +1667,10 @@ static void apply_mpeg2_speed(mr_decoder *dec, int fast, int verbose)
 static void apply_volume_set(int volume)
 {
     if (volume < 0) volume = 0;
-    if (volume > 64) volume = 64;
+    if (volume > MR_AUDIO_VOLUME_MAX) volume = MR_AUDIO_VOLUME_MAX;
     control_volume = volume;
     if (control_audio) audio_set_volume(control_audio, control_volume);
-    printf("volume: %d%%\n", control_volume * 100 / 64);
+    printf("volume: %d%%\n", control_volume * 100 / MR_AUDIO_VOLUME_FULL);
 }
 
 static void apply_volume_step(int delta)
@@ -1687,7 +1687,7 @@ static int control_signal_event(amiga_display *disp)
     ULONG sig = SetSignal(0, SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_D |
                              SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F);
     ULONG commands = 0;
-    ULONG volume = 64;
+    ULONG volume = MR_AUDIO_VOLUME_FULL;
     if (sig & (SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_F)) return MR_EV_QUIT;
     if (sig & SIGBREAKF_CTRL_D) return MR_EV_PAUSE;
     if (sig & SIGBREAKF_CTRL_E) {
@@ -2360,7 +2360,7 @@ int main(int argc, char **argv)
                "[--mpeg2-speed=quality|fast] "
                "[--audio-rate=normal|low] [--no-audio] [--no-video] [--audio-mono] "
                "[--no-videocore] "
-               "[--audio-out=paula|ahi] [--ahi-unit=0..3] "
+               "[--audio-out=paula|ahi] [--ahi-unit=0..3] [--volume=0..400] "
                "[--time] [--live-diag] [--throughput|--no-throughput] "
                "[--tls=1.2|1.3]\n");
         return mrplay_exit(5);
@@ -2501,6 +2501,14 @@ int main(int argc, char **argv)
                     printf("invalid audio output: %s\n", argv[i]);
                     return mrplay_exit(5);
                 }
+            }
+            else if (!strncmp(argv[i], "--volume=", 9)) {
+                unsigned level;
+                if (mr_parse_volume(argv[i], &level) < 0) {
+                    printf("invalid volume (0..400): %s\n", argv[i]);
+                    return mrplay_exit(5);
+                }
+                control_volume = (int)level;
             }
             else if (!strcmp(argv[i], "--no-audio")) no_audio = 1;
             else if (!strcmp(argv[i], "--no-video")) no_video = 1;

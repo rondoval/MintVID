@@ -343,6 +343,7 @@ mrplay --hls-max-width=640 --hls-max-height=360 \
 mrplay --fast-buffer=8 "DH0:Videos/movie.avi"
 mrplay --no-videocore "DH0:Videos/movie.mp4"
 mrplay --audio-out=ahi --ahi-unit=1 "DH0:Videos/movie.mp4"
+mrplay --volume=250 "DH0:Videos/film.mkv"
 ```
 
 Plain HTTP is present in the normal Amiga build. HTTPS uses
@@ -548,6 +549,14 @@ and mode AHI's preferences give it. AHI plays the source's own sample rate, so
 44.1 and 48 kHz sound is not halved as it is for Paula. If the unit cannot be
 opened, mrplay plays through Paula instead.
 
+The volume goes from 0 to 400%, in 8/64 steps from the keys and buttons. Up
+to 100% the output sets it; above that mrplay amplifies the sound itself, by
+up to four times (+12 dB), and a limiter holds loud passages back instead of
+letting them clip. That helps with films, which are often mixed much quieter
+than music, and with AHI, which plays a stereo stream at half level (6 dB
+down). The controller's volume slider is saved with its other settings, and
+each file starts at its level (`--volume=0..400`, in percent).
+
 The **Audio** chooser picks the output rate (Normal, or Low to halve it
 again), **No audio** skips the audio decoder and output entirely, and **Mono
 audio** (`--audio-mono`) asks the codec for one channel instead of two. Paula
@@ -605,7 +614,8 @@ at a time for local QuickTime MOV/MP4 files, landing on the nearest keyframe
 via the sample index rather than pretending that fast decode is a seek
 operation. AVI, MKV and network/live sources don't have a keyframe index yet
 and keep cursor-right as the fast-forward toggle instead. Cursor up/down adjust
-the volume in the same 8/64 steps as ytgui's **Vol -**/**Vol +** buttons.
+the volume (0 to 400%) in the same 8/64 steps as ytgui's **Vol -**/**Vol +**
+buttons.
 
 Every GUI has a **MintVID** title-bar menu with **Guide...** (opens
 [`MintVID.guide`](MintVID.guide) via AmigaGuide, with full in-app help and a

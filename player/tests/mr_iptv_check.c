@@ -1095,6 +1095,56 @@ int main(void) {
     assert(!mr_play_options_parse(&parsed, 2, bad_out_argv, error,
                                   sizeof(error)));
   }
+
+  /* Volume: 100% adds no flag; every other level goes out as --volume= in
+   * percent and comes back the same through a browser's re-parse; past
+   * 400% or not a number is refused. */
+  {
+    mr_play_options o, parsed;
+    char *argv_rt[40];
+    char buf[1024], args[4096], error[128];
+    char *over_argv[] = {"ytgui", "--volume=401"};
+    char *junk_argv[] = {"ytgui", "--volume=loud"};
+    unsigned level, taken;
+    int argc_rt;
+    char *p;
+
+    mr_play_options_default(&o);
+    assert(o.volume == MR_AUDIO_VOLUME_FULL);
+    assert(mr_build_player_arguments(args, sizeof(args), &o,
+                                     "https://example.test/watch", NULL, NULL));
+    assert(!strstr(args, "--volume"));
+    for (level = 0; level <= MR_AUDIO_VOLUME_MAX; level++) {
+      if (level == MR_AUDIO_VOLUME_FULL) continue;
+      mr_play_options_default(&o);
+      o.volume = level;
+      assert(mr_build_iptv_arguments(buf, sizeof(buf), &o));
+      assert(strstr(buf, "--volume="));
+      argv_rt[0] = "ytgui";
+      argc_rt = 1;
+      for (p = strtok(buf, " \n"); p && argc_rt < 40; p = strtok(NULL, " \n"))
+        argv_rt[argc_rt++] = p;
+      mr_play_options_default(&parsed);
+      assert(mr_play_options_parse(&parsed, argc_rt, argv_rt, error,
+                                   sizeof(error)));
+      assert(parsed.volume == level);
+    }
+    mr_play_options_default(&o);
+    o.volume = MR_AUDIO_VOLUME_MAX;
+    assert(mr_build_iptv_arguments(buf, sizeof(buf), &o));
+    assert(strstr(buf, "--volume=400"));
+    o.no_audio = 1;
+    assert(mr_build_iptv_arguments(buf, sizeof(buf), &o));
+    assert(!strstr(buf, "--volume"));
+    assert(mr_parse_volume("--volume=150", &taken) == 1 && taken == 96);
+    assert(mr_parse_volume("--volume=", &taken) == -1);
+    assert(mr_parse_volume("--volumes", &taken) == 0);
+    mr_play_options_default(&parsed);
+    assert(!mr_play_options_parse(&parsed, 2, over_argv, error,
+                                  sizeof(error)));
+    assert(!mr_play_options_parse(&parsed, 2, junk_argv, error,
+                                  sizeof(error)));
+  }
   remove("/tmp/mr_channels.json");
   remove("/tmp/mr_streams.json");
   mr_iptv_free(&d);

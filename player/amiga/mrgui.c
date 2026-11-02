@@ -126,6 +126,9 @@ static unsigned mode_count;
  * skip_after_ms[i]; update_skip_after() greys it out whenever it would have
  * no effect (Video: All Frames, or VQ Smoosh). */
 static Object *g_skip_after;
+/* Volume slider, file-level for the same reason: read_play_options() passes
+ * its level on as --volume=. */
+static Object *g_volume;
 static const unsigned skip_after_ms[] = {200, 500, 700, 1000, 1500, 2000};
 #define SKIP_AFTER_ROWS (sizeof skip_after_ms / sizeof skip_after_ms[0])
 
@@ -448,6 +451,11 @@ static void read_play_options(Object *mode, Object *c2p, Object *h264,
         options->skip_trigger_ms = row < SKIP_AFTER_ROWS
                                  ? skip_after_ms[row]
                                  : MR_SKIP_TRIGGER_DEFAULT_MS;
+    }
+    if (g_volume) {
+        ULONG level = MR_AUDIO_VOLUME_FULL;
+        GetAttr(SLIDER_Level, g_volume, &level);
+        options->volume = level;
     }
     mr_saved_options_save(options);
 }
@@ -1309,7 +1317,7 @@ static void mrg_playlist_handle(mrg_playlist_window *p)
 
 static void apply_gui_volume(Object *slider)
 {
-    ULONG level = 64;
+    ULONG level = MR_AUDIO_VOLUME_FULL;
     if (slider) {
         GetAttr(SLIDER_Level, slider, &level);
         mr_player_control_set_volume(level);
@@ -1352,7 +1360,6 @@ int main(void)
     Object *ff_button;
     Object *iptv_button;
     Object *youtube_button;
-    Object *volume_slider;
     Object *playlist_button;
     struct Window *window;
     mr_playlist playlist;
@@ -1387,6 +1394,7 @@ int main(void)
     ULONG initial_audio_rate, initial_fast_buffer, initial_no_audio;
     ULONG initial_mono_audio, initial_video_mode, initial_skip_after;
     ULONG initial_audio_out;
+    ULONG initial_volume;
 
     window_object = NULL;
     timermask = 0;
@@ -1423,7 +1431,6 @@ int main(void)
     ff_button = NULL;
     iptv_button = NULL;
     youtube_button = NULL;
-    volume_slider = NULL;
     playlist_button = NULL;
     memset(&playlist_gui, 0, sizeof(playlist_gui));
     mr_playlist_init(&playlist);
@@ -1452,6 +1459,7 @@ int main(void)
     skip_after_modes.lh_TailPred = (struct Node *)&skip_after_modes.lh_Head;
     skip_after_label = NULL;
     g_skip_after = NULL;
+    g_volume = NULL;
     g_videocore = NULL;
     audio_out_modes.lh_Head = (struct Node *)&audio_out_modes.lh_Tail;
     audio_out_modes.lh_Tail = NULL;
@@ -1642,6 +1650,9 @@ int main(void)
     initial_skip_after = skip_after_row(have_saved_options
                                         ? saved_options.skip_trigger_ms
                                         : MR_SKIP_TRIGGER_DEFAULT_MS);
+    initial_volume = have_saved_options &&
+                     saved_options.volume <= MR_AUDIO_VOLUME_MAX
+                   ? saved_options.volume : MR_AUDIO_VOLUME_FULL;
     initial_audio_out = 0;
     if (have_saved_options) {
         ULONG row;
@@ -1933,20 +1944,24 @@ int main(void)
                                          GA_Text, (ULONG)"YouTube...",
                                          GA_RelVerify, TRUE,
                                          TAG_DONE);
-    volume_slider = (Object *)NewObject(SLIDER_GetClass(), NULL,
-                                         GA_ID, G_VOLUME,
-                                         GA_RelVerify, TRUE,
-                                         SLIDER_Min, 0,
-                                         SLIDER_Max, 64,
-                                         SLIDER_Level, 64,
-                                         SLIDER_Orientation, SLIDER_HORIZONTAL,
-                                         TAG_DONE);
+    g_volume = (Object *)NewObject(SLIDER_GetClass(), NULL,
+                                   GA_ID, G_VOLUME,
+                                   GA_RelVerify, TRUE,
+                                   SLIDER_Min, 0,
+                                   SLIDER_Max, MR_AUDIO_VOLUME_MAX,
+                                   SLIDER_Level, initial_volume,
+                                   /* marks at 0, 100 ... 400% */
+                                   SLIDER_Ticks,
+                                   MR_AUDIO_VOLUME_MAX /
+                                   MR_AUDIO_VOLUME_FULL + 1,
+                                   SLIDER_Orientation, SLIDER_HORIZONTAL,
+                                   TAG_DONE);
     playlist_button = (Object *)NewObject(BUTTON_GetClass(), NULL,
                                           GA_ID, G_PLAYLIST,
                                           GA_Text, (ULONG)"Playlist",
                                           GA_RelVerify, TRUE, TAG_DONE);
     if (!play_button || !pause_button || !stop_button || !ff_button ||
-        !iptv_button || !youtube_button || !volume_slider ||
+        !iptv_button || !youtube_button || !g_volume ||
         !playlist_button)
         goto cleanup;
 
@@ -1969,7 +1984,7 @@ int main(void)
                                      LAYOUT_AddChild, (ULONG)ff_button,
                                      CHILD_WeightedWidth, 0,
                                      CHILD_MinWidth, 34, CHILD_MaxWidth, 34,
-                                     LAYOUT_AddChild, (ULONG)volume_slider,
+                                     LAYOUT_AddChild, (ULONG)g_volume,
                                      CHILD_WeightedWidth, 1,
                                      CHILD_MinWidth, 110,
                                      TAG_DONE);
@@ -2158,7 +2173,10 @@ int main(void)
                     break;
 
                 case G_VOLUME:
-                    apply_gui_volume(volume_slider);
+                    apply_gui_volume(g_volume);
+                    publish_play_options(master_options, mode, c2p, h264,
+                                         lace, scale, audio_rate, fast_buffer,
+                                         no_audio, mono_audio, video_mode);
                     break;
 
                 case G_PLAYLIST:
@@ -2268,7 +2286,7 @@ cleanup:
                 if (pause_button) DisposeObject(pause_button);
                 if (stop_button) DisposeObject(stop_button);
                 if (ff_button) DisposeObject(ff_button);
-                if (volume_slider) DisposeObject(volume_slider);
+                if (g_volume) DisposeObject(g_volume);
             }
             if (services) {
                 DisposeObject(services);
@@ -2297,6 +2315,7 @@ cleanup:
     free_chooser_nodes(&skip_after_modes);
     free_chooser_nodes(&audio_out_modes);
     g_skip_after = NULL;
+    g_volume = NULL;
     g_videocore = NULL;
     g_audio_out = NULL;
     close_reaction_classes();
