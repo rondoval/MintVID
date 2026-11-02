@@ -38,6 +38,11 @@
   window with no sound, because almost every packet read the whole buffer
   from disk again. Such files are now read through a window that keeps what
   was read last and reads ahead in steps of up to 512 KB.
+- **Less CPU while playing.** The player kept the CPU busy while it waited
+  for the next frame instead of sleeping. It now sleeps, so other programs,
+  the network and the mouse pointer keep their share: 1080p through the
+  VideoCore decoder on a Pi 4 went from nearly all the CPU to 40-65%, with
+  the same frame rate.
 
 ## 1.4.1 - 2026-10-08
 

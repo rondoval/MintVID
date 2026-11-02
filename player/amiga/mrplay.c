@@ -988,27 +988,31 @@ static void paced_sleep(uint64_t usec, scheduler_trace *trace,
     trace->sleep_actual_us = 0;
     trace->delay_ticks = 0;
     st->sleep_requested_us += usec;
-    /* Delay is only the coarse backoff. Recheck the absolute deadline so an
-     * oversleep is measured rather than carried into the next frame.
-     * service_audio_for_display() calls used to bracket this spin, but
-     * presenter.released (the only thing that makes that call do anything
-     * beyond a no-op audio_service()) is set only around the one blocking
-     * mr_demux_next_packet() call far below - never while pacing a sleep -
-     * so they never presented a frame or fed audio here; Paula's own
-     * worker task keeps running regardless. See trace_phase()'s own
-     * comment for the matching monotonic_us() reasoning. */
+    /* The task sleeps on timer.device for what is left, so the CPU is free
+     * until the deadline: a Delay() tick is 20 ms, longer than the waits
+     * between frames, and spinning on the EClock until the deadline kept
+     * the CPU busy for the whole wait - more than half of it at 1080p with
+     * a VideoCore decoder, which also starved every lower-priority task.
+     * The deadline is rechecked after each wake-up, so an oversleep is
+     * measured rather than carried into the next frame; less than 1 ms
+     * left counts as on time. Without timer.device, whole Delay() ticks
+     * for waits of 10 ms and more. */
     while ((end = monotonic_us()) - begin < usec) {
         uint64_t left = usec - (end - begin);
-        /* A one-tick Delay is a forced 20 ms oversleep for short deadlines.
-         * Spin on EClock until at least two ticks remain. */
-        if (left > 40000) {
-            LONG ticks = (LONG)((left - 20000) / 20000);
-            uint64_t delay_begin = monotonic_us();
-            if (ticks < 1) ticks = 1;
-            trace->delay_ticks = (unsigned long)ticks;
-            Delay(ticks);
-            trace->sleep_actual_us += monotonic_us() - delay_begin;
+        uint64_t wait_begin = end;
+        if (timer_request) {
+            if (left < 1000) break;
+            timer_request->tr_node.io_Command = TR_ADDREQUEST;
+            timer_request->tr_time.tv_secs = 0;
+            timer_request->tr_time.tv_micro =
+                left < 999999 ? (ULONG)left : 999999;
+            DoIO((struct IORequest *)timer_request);
+        } else {
+            if (left < 10000) break;
+            trace->delay_ticks++;
+            Delay(1);
         }
+        trace->sleep_actual_us += monotonic_us() - wait_begin;
     }
     end = monotonic_us();
     st->sleep_actual_us += end - begin;
