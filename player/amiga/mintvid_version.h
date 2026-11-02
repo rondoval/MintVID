@@ -5,9 +5,9 @@
  * $VER strings conventionally use version.revision rather than three-part
  * semantic versions, so the 1.4.x patch line remains Amiga version 1.4 while
  * MINTVID_VERSION carries the complete release number shown by the GUIs. */
-#define MINTVID_VERSION       "1.4.1"
+#define MINTVID_VERSION       "1.4.1-unofficial"
 #define MINTVID_AMIGA_VERSION "1.4"
-#define MINTVID_VERSION_DATE  "8.10.2026"
+#define MINTVID_VERSION_DATE  "2.11.2026"
 
 #if defined(__GNUC__)
 #define MINTVID_VERSION_USED __attribute__((used))
@@ -18,6 +18,6 @@
 #define MINTVID_DECLARE_VERSION(symbol, program) \
     const char symbol[] MINTVID_VERSION_USED = \
         "\0$VER: " program " " MINTVID_AMIGA_VERSION \
-        " (" MINTVID_VERSION_DATE ")"
+        " (" MINTVID_VERSION_DATE ") unofficial"
 
 #endif
