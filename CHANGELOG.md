@@ -10,11 +10,13 @@
   decoded on the Pi's VPU. The VPU also scales each picture and converts it
   to the screen's own pixel format, full screen and in a P96 window, where
   it follows every resize, so on a Pi 4 1080p plays full screen at its full
-  30 fps with **P96 (Fullscreen)**. Anything the VPU cannot take
-  plays in software as before. It is on whenever the library is installed;
-  the new **VideoCore decoding** checkbox in both controllers, or
-  `--no-videocore`, turns it off. Saved controller settings are reset once
-  by this update.
+  30 fps with **P96 (Fullscreen)**. While the VPU decodes, that mode
+  opens a true-colour screen first, 32 or 24 bits, whose rows the VPU
+  writes as they are; software decoding still prefers 16 bits. Anything the
+  VPU cannot take plays in software as before. It is on whenever the
+  library is installed; the new **VideoCore decoding** checkbox in both
+  controllers, or `--no-videocore`, turns it off. Saved controller settings
+  are reset once by this update.
 - **More P96 screen formats.** P96 (Fullscreen) also opens 16-bit
   little-endian, 24-bit RGB and 32-bit BGRA screens, the formats of a
   Raspberry Pi's VideoCore.card. At 1080p on a PiStorm it used to fall back
@@ -50,7 +52,15 @@
   for the next frame instead of sleeping. It now sleeps, so other programs,
   the network and the mouse pointer keep their share: 1080p through the
   VideoCore decoder on a Pi 4 went from nearly all the CPU to 40-65%, with
-  the same frame rate.
+  the same frame rate. Frames in the video queue also start on a 64-byte
+  boundary now, so they are copied in whole cache lines: about 3 points
+  less again for 1080p in a window.
+- **`--time` no longer slows playback down.** mrplay wrote its console
+  output one character at a time and timed every 188-byte packet of an
+  MPEG-TS stream and every file read, so with `--time` a 1080p TS stream
+  lost most of its frames. Output now goes out a line at a time and only
+  waits for the network are timed, so the report shows playback as it runs
+  without `--time`.
 
 ## 1.4.1 - 2026-10-08
 
