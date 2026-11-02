@@ -249,8 +249,8 @@ mr_status mr_demux_next_packet(mr_demux *d, mr_packet *pkt)
     int ts_timing = d->kind == MR_CONTAINER_TS && d->u.ts.timing_enabled;
     clock_t begin = ts_timing ? clock() : 0;
     mr_status status;
-    mr_demux_timing before;
-    if (ts_timing) before = d->u.ts.timing;
+    unsigned long scanned_before = ts_timing ? d->u.ts.timing.packets_scanned
+                                             : 0;
     if (pkt) { pkt->has_pts = 0; pkt->pts_us = 0; pkt->is_annexb = 0; }
     if (d->kind == MR_CONTAINER_AVI) status = mr_avi_next_packet(&d->u.avi, pkt);
     else if (d->kind == MR_CONTAINER_MOV) status = mr_mov_next_packet(&d->u.mov, pkt);
@@ -264,17 +264,11 @@ mr_status mr_demux_next_packet(mr_demux *d, mr_packet *pkt)
         mr_demux_timing *t = &d->u.ts.timing;
         unsigned long us = (unsigned long)((clock() - begin) * 1000000UL /
                                            CLOCKS_PER_SEC);
-        unsigned long delta;
-#define UPDATE_MAX(field) do { delta = t->field##_us - before.field##_us; \
-    if (delta > t->field##_max_us) t->field##_max_us = delta; } while (0)
+        unsigned long scanned = t->packets_scanned - scanned_before;
         t->calls++;
         t->call_us += us;
         if (us > t->call_max_us) t->call_max_us = us;
-        UPDATE_MAX(source); UPDATE_MAX(sync); UPDATE_MAX(assembly);
-        UPDATE_MAX(copy); UPDATE_MAX(audio); UPDATE_MAX(video);
-        delta = t->packets_scanned - before.packets_scanned;
-        if (delta > t->scanned_max) t->scanned_max = delta;
-#undef UPDATE_MAX
+        if (scanned > t->scanned_max) t->scanned_max = scanned;
     }
     return status;
 }

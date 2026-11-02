@@ -7,18 +7,32 @@
 #include "mr_youtube.h"
 #include "mr_alloc.h"
 
-#include <stdio.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include <unistd.h>
 
 #define MR_SOURCE_NAME_MAX 1024
 #define MR_SOURCE_ERROR_MAX 192
-/* libnix defaults FILE streams to a 1 KiB buffer. Local interleaved media then
- * crosses that boundary constantly, turning sequential AVI playback into many
- * small AmigaDOS reads. Keep libc's normal fully-buffered path, but enlarge its
- * read window enough to cover several low-resolution video/audio packets. */
-#define MR_LOCAL_FILE_BUFFER_SIZE (64u * 1024u)
+/* A local file larger than its buffer is read through a window: the most
+ * recently read bytes of the file, kept in a ring. Demuxers read forward
+ * with short steps back (Matroska peeks at an element header, then reads
+ * from just after its ID; MP4 alternates between nearby audio and video
+ * chunks), and the window serves those from memory. A read just past its
+ * end extends it by a step that doubles from MR_LOCAL_READ_MIN to
+ * MR_LOCAL_READ_MAX while reading stays sequential, so a long run of packets
+ * costs few AmigaDOS reads and no single read blocks playback for long; any
+ * other read restarts the window at the new offset with the smallest step.
+ *
+ * The file is read with read() and lseek(), with no stdio buffer
+ * underneath: libnix's fseek() throws its whole buffer away, and the next
+ * small read refills all of it, which is why stdio buffering cannot stand
+ * in for the window. */
+#define MR_LOCAL_READ_MIN   (64u * 1024u)
+#define MR_LOCAL_READ_MAX   (512u * 1024u)
+/* The window without a Fast buffer: room for two minimum steps, so an
+ * extension still keeps the step before it. */
+#define MR_LOCAL_WINDOW_MIN (2u * MR_LOCAL_READ_MIN)
 
 struct mr_source {
     void   *ctx;
@@ -26,19 +40,23 @@ struct mr_source {
     int   (*read_at)(void *, size_t, void *, size_t);
     void  (*close)(void *);
     char    final_name[MR_SOURCE_NAME_MAX];
-    int     network;
     size_t  buffer_capacity;
     int     memory_cached;
 };
 
 typedef struct {
-    FILE   *file;          /* NULL once content is fully cached in Fast RAM */
-    size_t  pos;
-    int     pos_valid;
-    unsigned char *buffer;
+    int     fd;            /* -1 once the whole file is in buffer */
+    size_t  len;           /* file size */
+    size_t  fd_pos;        /* offset the next read() starts at */
+    int     fd_pos_valid;
+    unsigned char *buffer; /* the whole file, or the window's ring */
     size_t  buffer_size;
-    int     cached;
-    size_t  cached_len;
+    int     cached;        /* buffer holds the whole file */
+    size_t  win_off;       /* file offset of the window's first byte */
+    size_t  win_len;       /* bytes in the window */
+    size_t  win_head;      /* ring index of the byte at win_off */
+    size_t  step;          /* next read-ahead size */
+    size_t  step_min, step_max;
 } file_source;
 
 static char g_source_error[MR_SOURCE_ERROR_MAX];
@@ -48,19 +66,12 @@ static int g_timing_enabled = 0;
 void mr_source_set_timing_enabled(int enabled) { g_timing_enabled = enabled != 0; }
 int  mr_source_timing_enabled(void) { return g_timing_enabled; }
 
-static unsigned long elapsed_ms(clock_t start)
-{
-    clock_t elapsed = clock() - start;
-    return (unsigned long)((elapsed * 1000UL) / CLOCKS_PER_SEC);
-}
-
 void mr_source_timing_get(mr_source_timing *timing)
 {
     if (timing) *timing = g_timing;
 }
 void mr_source_timing_reset(void) { memset(&g_timing, 0, sizeof g_timing); }
 void mr_source_timing_add_network(unsigned long ms) { g_timing.network_ms += ms; }
-void mr_source_mark_network(mr_source *s) { if (s) s->network = 1; }
 void mr_source_timing_add_hls_segment(unsigned long ms) { g_timing.hls_segment_ms += ms; }
 void mr_source_timing_add_hls_playlist(unsigned long ms) { g_timing.hls_playlist_ms += ms; }
 
@@ -126,28 +137,117 @@ mr_source *mr_source_create(void *ctx, size_t len,
     return s;
 }
 
+/* Reads len bytes at off straight from the file. */
+static int fd_read_at(file_source *f, size_t off, unsigned char *dst,
+                      size_t len)
+{
+    if (!f->fd_pos_valid || f->fd_pos != off) {
+        if (off > 0x7fffffffUL ||
+            lseek(f->fd, (off_t)off, SEEK_SET) != (off_t)off) {
+            f->fd_pos_valid = 0;
+            return 0;
+        }
+        f->fd_pos = off;
+        f->fd_pos_valid = 1;
+    }
+    while (len) {
+        long got = (long)read(f->fd, dst, len);
+        if (got <= 0) {
+            f->fd_pos_valid = 0;
+            return 0;
+        }
+        dst += got;
+        len -= (size_t)got;
+        f->fd_pos += (size_t)got;
+    }
+    return 1;
+}
+
+/* Copies n window bytes starting at file offset off, which the window
+ * holds. */
+static void window_copy(const file_source *f, size_t off, unsigned char *dst,
+                        size_t n)
+{
+    size_t at = (f->win_head + (off - f->win_off)) % f->buffer_size;
+    size_t first = f->buffer_size - at;
+    if (first > n) first = n;
+    memcpy(dst, f->buffer + at, first);
+    memcpy(dst + first, f->buffer, n - first);
+}
+
+/* Reads the n file bytes after the window's end into the ring, dropping its
+ * oldest bytes to make room. n is at most the ring's size. */
+static int window_extend(file_source *f, size_t n)
+{
+    size_t end = f->win_off + f->win_len, at, first;
+    if (f->win_len + n > f->buffer_size) {
+        size_t drop = f->win_len + n - f->buffer_size;
+        f->win_off += drop;
+        f->win_head = (f->win_head + drop) % f->buffer_size;
+        f->win_len -= drop;
+    }
+    at = (f->win_head + f->win_len) % f->buffer_size;
+    first = f->buffer_size - at;
+    if (first > n) first = n;
+    if (!fd_read_at(f, end, f->buffer + at, first) ||
+        (n > first && !fd_read_at(f, end + first, f->buffer, n - first))) {
+        f->win_len = 0;
+        return 0;
+    }
+    f->win_len += n;
+    return 1;
+}
+
 static int file_read_at(void *opaque, size_t off, void *dst, size_t len)
 {
     file_source *f = (file_source *)opaque;
+    unsigned char *out = (unsigned char *)dst;
     if (!f || (!dst && len)) return 0;
+    if (off > f->len || len > f->len - off) return 0;
     if (f->cached) {
-        if (off > f->cached_len || len > f->cached_len - off) return 0;
         if (len) memcpy(dst, f->buffer + off, len);
         return 1;
     }
-    if (!f->file) return 0;
-    if (!f->pos_valid || f->pos != off) {
-        if (off > 0x7fffffffUL || fseek(f->file, (long)off, SEEK_SET) != 0) {
-            f->pos_valid = 0;
-            return 0;
+    while (len) {
+        size_t end = f->win_off + f->win_len, want;
+        if (off >= f->win_off && off < end) {
+            size_t n = end - off;
+            if (n > len) n = len;
+            window_copy(f, off, out, n);
+            off += n;
+            out += n;
+            len -= n;
+            continue;
         }
+        if (len > f->buffer_size / 2) {
+            /* Too big to keep: read it straight into the caller's buffer
+             * and go on from its end. */
+            if (!fd_read_at(f, off, out, len)) return 0;
+            f->win_off = off + len;
+            f->win_len = 0;
+            f->win_head = 0;
+            return 1;
+        }
+        if (off >= end && (off == end || f->win_len) &&
+            off - end + len <= f->buffer_size / 2) {
+            /* Ahead of the window but within reach: read through any gap,
+             * so a reader still working behind stays in the window. Only
+             * reading straight on makes the steps grow. */
+            if (f->win_len && off - end <= f->step &&
+                f->step < f->step_max) {
+                f->step *= 2;
+                if (f->step > f->step_max) f->step = f->step_max;
+            }
+        } else {
+            f->win_off = end = off;
+            f->win_len = 0;
+            f->win_head = 0;
+            f->step = f->step_min;
+        }
+        want = off - end + (len > f->step ? len : f->step);
+        if (want > f->len - end) want = f->len - end;
+        if (!window_extend(f, want)) return 0;
     }
-    if (len && fread(dst, 1, len, f->file) != len) {
-        f->pos_valid = 0;
-        return 0;
-    }
-    f->pos = off + len;
-    f->pos_valid = 1;
     return 1;
 }
 
@@ -155,7 +255,7 @@ static void file_close(void *opaque)
 {
     file_source *f = (file_source *)opaque;
     if (!f) return;
-    if (f->file) fclose(f->file);
+    if (f->fd >= 0) close(f->fd);
     mr_free(f->buffer);
     free(f);
 }
@@ -164,101 +264,88 @@ static mr_source *open_local_file(const char *path, size_t requested_buffer)
 {
     file_source *ctx;
     mr_source *source;
-    size_t actual_buffer;
-    long end;
-    FILE *file;
+    off_t end;
+    int fd;
 
-    /* Determine the file size through a throwaway stream, before the real
-     * stream performs any operation of its own - setvbuf() below must run
-     * before the first operation on *its* stream, so size discovery cannot
-     * share it (a seek would already count as an operation). */
-    {
-        FILE *probe = fopen(path, "rb");
-        if (!probe) {
-            mr_source_set_error("cannot open local file");
-            return NULL;
-        }
-        if (fseek(probe, 0, SEEK_END) != 0 || (end = ftell(probe)) <= 0) {
-            fclose(probe);
-            mr_source_set_error("cannot determine local file size");
-            return NULL;
-        }
-        fclose(probe);
-    }
-
-    file = fopen(path, "rb");
-    if (!file) {
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
         mr_source_set_error("cannot open local file");
+        return NULL;
+    }
+    end = lseek(fd, 0, SEEK_END);
+    if (end <= 0) {
+        close(fd);
+        mr_source_set_error("cannot determine local file size");
         return NULL;
     }
     ctx = (file_source *)calloc(1, sizeof *ctx);
     if (!ctx) {
-        fclose(file);
+        close(fd);
         mr_source_set_error("not enough memory for local file");
         return NULL;
     }
+    ctx->fd = fd;
+    ctx->len = (size_t)end;
 
     /* Whole file fits inside the Fast buffer budget: read it once, up
-     * front, into a block sized to the file itself, then close the stream
-     * entirely. Every later mr_source_read_at() is then served straight
-     * from memory - no further disk I/O, which is what a "Fast buffer"
-     * actually promises. Merely widening libc's stdio window (below)
-     * cannot promise that once a demuxer's reads stop being sequential
-     * (index parsing, interleaved chunks that outrun the window) - that
-     * gap is what let a small file "spam" the disk with read requests
-     * instead of being buffered once. */
-    if (requested_buffer && (size_t)end <= requested_buffer) {
-        unsigned char *buffer = (unsigned char *)mr_alloc_fast((size_t)end);
+     * front, into a block sized to the file itself, then close the file.
+     * Every later mr_source_read_at() is then served straight from memory,
+     * which is what a "Fast buffer" promises. */
+    if (requested_buffer && ctx->len <= requested_buffer) {
+        unsigned char *buffer = (unsigned char *)mr_alloc_fast(ctx->len);
         if (buffer) {
-            if (fread(buffer, 1, (size_t)end, file) == (size_t)end) {
-                fclose(file);
+            if (fd_read_at(ctx, 0, buffer, ctx->len)) {
+                close(fd);
+                ctx->fd = -1;
                 ctx->buffer = buffer;
-                ctx->buffer_size = (size_t)end;
+                ctx->buffer_size = ctx->len;
                 ctx->cached = 1;
-                ctx->cached_len = (size_t)end;
-                source = mr_source_create(ctx, (size_t)end, file_read_at,
+                source = mr_source_create(ctx, ctx->len, file_read_at,
                                           file_close, path);
-                mr_source_set_buffer_capacity(source, (size_t)end);
+                mr_source_set_buffer_capacity(source, ctx->len);
                 mr_source_set_memory_cached(source, 1);
                 return source;
             }
             mr_free(buffer);
-            fclose(file);
+            close(fd);
             free(ctx);
             mr_source_set_error("cannot read local file");
             return NULL;
         }
         /* Not enough contiguous Fast RAM for even the exact file size -
-         * fall through to the windowed stdio buffer below. */
+         * fall through to the window below. */
     }
 
-    /* setvbuf() must run before the first operation on the stream; `file`
-     * is freshly opened and untouched at this point in every remaining
-     * path, so each branch below is still that first operation. */
+    /* The Fast buffer becomes the window, halving until it fits; without
+     * one, the window is the smallest that still works. */
     if (requested_buffer) {
         size_t attempt = requested_buffer;
         while (attempt >= 4u * 1024u * 1024u) {
-            unsigned char *buffer = (unsigned char *)mr_alloc_fast(attempt);
-            if (buffer) {
-                if (setvbuf(file, (char *)buffer, _IOFBF, attempt) == 0) {
-                    ctx->buffer = buffer;
-                    ctx->buffer_size = attempt;
-                    break;
-                }
-                mr_free(buffer);
+            ctx->buffer = (unsigned char *)mr_alloc_fast(attempt);
+            if (ctx->buffer) {
+                ctx->buffer_size = attempt;
+                break;
             }
             attempt /= 2;
         }
     }
-    if (!ctx->buffer)
-        (void)setvbuf(file, NULL, _IOFBF, MR_LOCAL_FILE_BUFFER_SIZE);
-
-    ctx->file = file;
-    ctx->pos = 0;
-    ctx->pos_valid = 1;
-    actual_buffer = ctx->buffer_size;
-    source = mr_source_create(ctx, (size_t)end, file_read_at, file_close, path);
-    mr_source_set_buffer_capacity(source, actual_buffer);
+    if (!ctx->buffer) {
+        ctx->buffer = (unsigned char *)mr_alloc(MR_LOCAL_WINDOW_MIN);
+        ctx->buffer_size = MR_LOCAL_WINDOW_MIN;
+    }
+    if (!ctx->buffer) {
+        close(fd);
+        free(ctx);
+        mr_source_set_error("not enough memory for local file");
+        return NULL;
+    }
+    ctx->step_max = ctx->buffer_size / 2;
+    if (ctx->step_max > MR_LOCAL_READ_MAX) ctx->step_max = MR_LOCAL_READ_MAX;
+    ctx->step_min = MR_LOCAL_READ_MIN;
+    if (ctx->step_min > ctx->step_max) ctx->step_min = ctx->step_max;
+    ctx->step = ctx->step_min;
+    source = mr_source_create(ctx, ctx->len, file_read_at, file_close, path);
+    mr_source_set_buffer_capacity(source, ctx->buffer_size);
     return source;
 }
 
@@ -304,16 +391,7 @@ int mr_source_read_at(mr_source *s, size_t off, void *dst, size_t len)
     if (s->len != MR_SOURCE_LEN_UNKNOWN &&
         (off > s->len || len > s->len - off))
         return 0;
-    if (!g_timing_enabled)
-        return s->read_at(s->ctx, off, dst, len);
-    {
-        clock_t started = clock();
-        int ok = s->read_at(s->ctx, off, dst, len);
-        unsigned long ms = elapsed_ms(started);
-        g_timing.read_ms += ms;
-        if (s->network) g_timing.network_ms += ms;
-        return ok;
-    }
+    return s->read_at(s->ctx, off, dst, len);
 }
 
 size_t mr_source_length(const mr_source *s)

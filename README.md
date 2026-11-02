@@ -365,7 +365,7 @@ buffer the compressed input. What the buffer does depends on the source:
 | Source | What the Fast buffer does |
 |--------|---------------------------|
 | Local file that fits in the buffer | The whole file is read into Fast RAM when it opens, and playback never touches the disk again. |
-| Larger local file | The buffer becomes a large read-ahead window, so demuxing goes to AmigaDOS far less often. |
+| Larger local file | The buffer keeps the part of the file read last. Reading goes ahead in steps of up to 512 KB and short steps back come from memory, so demuxing goes to AmigaDOS far less often. |
 | Direct/progressive HTTP (including YouTube 360p MP4) | Rewind/read-ahead cache that also soaks up data already waiting on the socket while the CPU decodes. |
 | HLS (IPTV, YouTube HLS) | Bounds a queue of downloaded segments: up to eight ahead for recorded streams, three for live streams. |
 
@@ -373,10 +373,10 @@ buffer the compressed input. What the buffer does depends on the source:
 24 MB free for the decoder, display, TLS, audio and frame queue; it never goes
 above 16 MB. 32 and 64 MB are explicit choices for machines with plenty of
 Fast RAM. A fixed size keeps at least 8 MB free and halves itself until it
-fits. `off` keeps the small normal file buffer and HTTP's 4 MB compatibility
-cache, and HLS then fetches only the next segment ahead. `mrplay` prints the
-size it actually got at startup. The buffer is always allocated from Fast
-RAM, never Chip RAM.
+fits. `off` reads local files through a small 128 KB window and keeps HTTP's
+4 MB compatibility cache, and HLS then fetches only the next segment ahead.
+`mrplay` prints the size it actually got at startup. The buffer is always
+allocated from Fast RAM, never Chip RAM.
 
 Loading a whole file takes as long as reading it once, and that read happens
 before the first frame, so a big file on a slow drive or network share can

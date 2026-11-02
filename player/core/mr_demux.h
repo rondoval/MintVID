@@ -84,10 +84,7 @@ typedef struct mr_demux mr_demux;
 typedef int (*mr_demux_service_fn)(void *opaque);
 typedef struct mr_demux_timing {
     unsigned long calls, call_us, call_max_us;
-    unsigned long source_us, sync_us, assembly_us, copy_us;
-    unsigned long audio_us, video_us, packets_scanned, service_calls;
-    unsigned long source_max_us, sync_max_us, assembly_max_us, copy_max_us;
-    unsigned long audio_max_us, video_max_us, scanned_max;
+    unsigned long packets_scanned, service_calls, scanned_max;
 } mr_demux_timing;
 struct mr_http_options;
 

@@ -50,10 +50,9 @@ typedef struct {
     mr_demux_service_fn service;
     void          *service_opaque;
     mr_demux_timing timing;
-    /* Off by default: mr_ts_next_packet() runs several clock() reads per
-     * 188/192-byte packet (source read, sync parse, PES assembly, copy),
-     * all only ever feeding `timing` for the --time report. Skip them on
-     * an ordinary run - see mr_demux_set_timing_enabled(). */
+    /* Off by default: mr_demux_next_packet() times each call for the
+     * --time report only when this is set - see
+     * mr_demux_set_timing_enabled(). */
     int             timing_enabled;
 } mr_ts;
 

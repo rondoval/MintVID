@@ -2,7 +2,7 @@
  * MintVID - random-access compressed-media source.
  *
  * Demuxers ask for exact byte ranges without caring whether the bytes come
- * from a local stdio file or a buffered HTTP/HTTPS response.
+ * from a local file or a buffered HTTP/HTTPS response.
  */
 #ifndef MR_SOURCE_H
 #define MR_SOURCE_H
@@ -12,8 +12,7 @@
 typedef struct mr_source mr_source;
 
 typedef struct mr_source_timing {
-    unsigned long read_ms;          /* all source reads (disk or network) */
-    unsigned long network_ms;       /* HTTP reads/open waits */
+    unsigned long network_ms;       /* HTTP reads that waited on the network */
     unsigned long hls_segment_ms;   /* HLS segment open/read waits */
     unsigned long hls_playlist_ms;  /* HLS playlist fetch/refetch waits */
 } mr_source_timing;
@@ -36,24 +35,23 @@ void       mr_source_close(mr_source *s);
 size_t     mr_source_buffer_capacity(const mr_source *s);
 /* True once a local file has been fully read into a Fast RAM block up
  * front - every mr_source_read_at() call is then served from memory with
- * no further disk I/O. False for the windowed stdio-buffer fallback (used
- * when the file does not fit the Fast buffer budget) and for non-local
- * sources. */
+ * no further disk I/O. False for a local file read through a window (one
+ * that does not fit the Fast buffer budget) and for non-local sources. */
 int        mr_source_is_memory_cached(const mr_source *s);
 
 /* Process-local cumulative blocking-I/O counters.  They are intentionally
  * queried by the player only at rolling-report boundaries, never per frame. */
 void       mr_source_timing_get(mr_source_timing *timing);
 void       mr_source_timing_reset(void);
-/* Off by default: mr_source_read_at() (and the HLS playlist/segment fetch
- * timers in mr_hls.c) only ever feed mr_source_timing_get(), read solely by
- * the --time report - skip the clock() calls entirely otherwise. Global,
- * like the g_timing it gates, since mr_source has no per-instance state a
- * caller could thread a flag through. */
+/* Off by default: the HTTP reads that wait on the network and the HLS
+ * playlist/segment fetch timers in mr_hls.c only ever feed
+ * mr_source_timing_get(), read solely by the --time report - skip the
+ * clock() calls entirely otherwise. Reads served from memory are never
+ * timed. Global, like the g_timing it gates, since mr_source has no
+ * per-instance state a caller could thread a flag through. */
 void       mr_source_set_timing_enabled(int enabled);
 int        mr_source_timing_enabled(void);
 void       mr_source_timing_add_network(unsigned long ms);
-void       mr_source_mark_network(mr_source *s);
 void       mr_source_timing_add_hls_segment(unsigned long ms);
 void       mr_source_timing_add_hls_playlist(unsigned long ms);
 

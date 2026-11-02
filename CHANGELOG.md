@@ -32,6 +32,11 @@
 
 - Reconnecting to a live stream reopened the video decoder with codec data
   from the stream it had just closed.
+- **Large files play with a Fast buffer.** A local file bigger than the Fast
+  buffer (16 MB with the controllers' default, Auto) could stay at a black
+  window with no sound, because almost every packet read the whole buffer
+  from disk again. Such files are now read through a window that keeps what
+  was read last and reads ahead in steps of up to 512 KB.
 
 ## 1.4.1 - 2026-10-08
 

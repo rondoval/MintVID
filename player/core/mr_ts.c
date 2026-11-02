@@ -7,7 +7,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #define TS_SYNC             0x47
 #define TS_PID_NONE         0x1fff
@@ -22,11 +21,6 @@
 #define TS_PTS_SAMPLE_MAX   32
 #define TS_PES_MAX          (16UL * 1024 * 1024)
 #define TS_SERVICE_PACKETS  16
-
-static unsigned long ticks_us(clock_t begin)
-{
-    return (unsigned long)((clock() - begin) * 1000000UL / CLOCKS_PER_SEC);
-}
 
 typedef struct {
     const uint8_t *p;
@@ -780,7 +774,6 @@ static int pes_append(mr_ts_pes *p, const uint8_t *data, size_t len)
 static mr_status emit_pes(mr_ts *t, mr_ts_pes *p, int video, mr_packet *pkt)
 {
     mr_status st;
-    clock_t begin = t->timing_enabled ? clock() : 0;
     pkt->has_pts = p->has_pts;
     pkt->pts_us = p->has_pts
         ? mr_u64_div_u24(mr_u64_mul_u32(p->pts, 1000000u), 90000u) : 0;
@@ -802,7 +795,6 @@ static mr_status emit_pes(mr_ts *t, mr_ts_pes *p, int video, mr_packet *pkt)
         pkt->data = p->data;
         pkt->len = (uint32_t)p->len;
         st = p->len ? MR_OK : MR_EAGAIN;
-        if (t->timing_enabled) t->timing.copy_us += ticks_us(begin);
     } else {
         pkt->is_video = video;
         pkt->data = p->data;
@@ -813,10 +805,6 @@ static mr_status emit_pes(mr_ts *t, mr_ts_pes *p, int video, mr_packet *pkt)
     p->expected = 0;
     p->active = 0;
     p->has_pts = 0;
-    if (t->timing_enabled) {
-        if (video) t->timing.video_us += ticks_us(begin);
-        else t->timing.audio_us += ticks_us(begin);
-    }
     return st;
 }
 
@@ -833,18 +821,13 @@ mr_status mr_ts_next_packet(mr_ts *t, mr_packet *pkt)
         size_t expected;
         mr_ts_pes *a;
         int video;
-        clock_t mark = 0;
-        clock_t handling_mark = 0;
 
-        if (t->timing_enabled) mark = clock();
         if (!ts_read_at(t, t->cursor, packet, (size_t)t->packet_size)) {
-            if (t->timing_enabled) t->timing.source_us += ticks_us(mark);
             /* A streaming source has no known end: a short/failed read is the
              * end of the stream, so fall through to flush any pending PES. */
             if (t->streaming) break;
             return MR_EFORMAT;
         }
-        if (t->timing_enabled) t->timing.source_us += ticks_us(mark);
         t->timing.packets_scanned++;
         if (--service_countdown == 0) {
             if (t->service) {
@@ -853,16 +836,13 @@ mr_status mr_ts_next_packet(mr_ts *t, mr_packet *pkt)
             }
             service_countdown = TS_SERVICE_PACKETS;
         }
-        if (t->timing_enabled) mark = clock();
         p = payload(packet + t->sync_off, &n, &pusi, &pid);
-        if (t->timing_enabled) t->timing.sync_us += ticks_us(mark);
         if (!p || (pid != t->video_pid && pid != t->audio_pid)) {
             t->cursor += (size_t)t->packet_size;
             continue;
         }
         video = pid == t->video_pid;
         a = video ? &t->video_pes : &t->audio_pes;
-        if (t->timing_enabled) handling_mark = clock();
 
         /* Return the completed old PES first. Leave this PUSI packet at the
          * cursor so the next call starts the new PES without losing bytes. */
@@ -872,7 +852,6 @@ mr_status mr_ts_next_packet(mr_ts *t, mr_packet *pkt)
         t->cursor += (size_t)t->packet_size;
         es = p;
         es_len = n;
-        if (t->timing_enabled) mark = clock();
         if (pusi) {
             es = pes_payload(p, &es_len, &pts, &has_pts, &expected);
             if (!es) {
@@ -911,17 +890,7 @@ mr_status mr_ts_next_packet(mr_ts *t, mr_packet *pkt)
             size_t remain = a->expected > a->len ? a->expected - a->len : 0;
             if (es_len > remain) es_len = remain;
         }
-        if (t->timing_enabled) t->timing.assembly_us += ticks_us(mark);
-        if (t->timing_enabled) mark = clock();
-        if (!pes_append(a, es, es_len)) {
-            if (t->timing_enabled) t->timing.copy_us += ticks_us(mark);
-            return MR_ENOMEM;
-        }
-        if (t->timing_enabled) {
-            t->timing.copy_us += ticks_us(mark);
-            if (video) t->timing.video_us += ticks_us(handling_mark);
-            else t->timing.audio_us += ticks_us(handling_mark);
-        }
+        if (!pes_append(a, es, es_len)) return MR_ENOMEM;
         if (a->expected && a->len >= a->expected)
             return emit_pes(t, a, video, pkt);
     }

@@ -2322,9 +2322,12 @@ int main(int argc, char **argv)
     playback_stats stats;
     scheduler_trace trace;
 
-    /* Unbuffered so every diagnostic reaches the shell immediately, even if a
-     * later step hangs or crashes (libnix stdout can otherwise block-buffer). */
-    setvbuf(stdout, NULL, _IONBF, 0);
+    /* Line-buffered, so every diagnostic line reaches the shell as soon as it
+     * is complete, even if a later step hangs or crashes (libnix stdout can
+     * otherwise block-buffer). Not unbuffered: libnix prints through putc(),
+     * so an unbuffered stdout costs a DOS Write() per character, and --time's
+     * reports alone then took about a quarter of a second each. */
+    setvbuf(stdout, NULL, _IOLBF, 4096);
     control_port_open();
     DeleteFile((CONST_STRPTR)MR_PLAYER_STATUS_FILE);
     DeleteFile((CONST_STRPTR)MR_PLAYER_STATUS_TMP);
@@ -2927,7 +2930,7 @@ int main(int argc, char **argv)
     /* Everything printed so far (codec probe, media info, display backend)
      * is the last known-good state if what follows hangs before the first
      * frame decodes - a real, observed failure mode on some IPTV streams.
-     * stdout is already unbuffered (setvbuf() above), but the destination
+     * stdout is already line-buffered (setvbuf() above), but the destination
      * filesystem can still cache Write()s in memory for a few seconds before
      * committing them to the physical device; Flush() forces that commit now
      * rather than leaving this durable only up to whenever the OS next
@@ -3229,11 +3232,9 @@ int main(int argc, char **argv)
     mr_h264_set_service(&dec, service_player_during_packet, &trace);
     mr_h264_set_quit(&dec, player_h264_quit, NULL);
     mr_mpeg2_set_service(&dec, service_player_during_packet, &trace);
-    /* Off by default: mr_ts_next_packet() (several clock() reads per
-     * 188/192-byte TS packet) and mr_source_read_at()/the HLS playlist and
-     * segment fetch timers (two clock() reads per source read) only ever
-     * feed the --time report. No-ops for any non-TS container / non-network
-     * source. */
+    /* Off by default: the per-call TS demux timer and the network/HLS fetch
+     * timers only ever feed the --time report. No-ops for any non-TS
+     * container / non-network source. */
     mr_demux_set_timing_enabled(dx, want_time);
     mr_source_set_timing_enabled(want_time);
     /* Keep audio/video/UI alive (and quit responsive) while the HLS live path

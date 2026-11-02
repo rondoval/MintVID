@@ -1841,20 +1841,13 @@ static void http_readahead(http_source *h, int min_only)
     }
 }
 
-static int http_read_at(void *opaque, size_t off, void *dst, size_t len)
+/* Reads a range the cache does not hold from the response, reconnecting at
+ * off when the open response is somewhere else. */
+static int http_read_network(http_source *h, size_t off, unsigned char *out,
+                             size_t len)
 {
-    http_source *h = (http_source *)opaque;
-    unsigned char *out = (unsigned char *)dst;
     size_t done = 0;
     int retries = 0;
-    if (!len) return 1;
-    if (off + len > h->max_read) h->max_read = off + len;
-    if (cache_copy(h, off, out, len)) {
-        /* Served from RAM: still top up from any socket data that arrived while
-         * the player was busy, so the window stays ahead of playback. */
-        http_readahead(h, 0);
-        return 1;
-    }
 
     /* A demuxer may reread a header that overlaps the current network
      * position (TS's 512-byte sniff versus 188-byte packets). Reuse the cached
@@ -1889,6 +1882,31 @@ static int http_read_at(void *opaque, size_t off, void *dst, size_t len)
     cache_store(h, off, out, len);
     http_readahead(h, 0);
     return 1;
+}
+
+static int http_read_at(void *opaque, size_t off, void *dst, size_t len)
+{
+    http_source *h = (http_source *)opaque;
+    unsigned char *out = (unsigned char *)dst;
+    clock_t started;
+    int ok;
+    if (!len) return 1;
+    if (off + len > h->max_read) h->max_read = off + len;
+    if (cache_copy(h, off, out, len)) {
+        /* Served from RAM: still top up from any socket data that arrived while
+         * the player was busy, so the window stays ahead of playback. */
+        http_readahead(h, 0);
+        return 1;
+    }
+    /* Only a read that waits on the network counts for --time: a TS stream
+     * reads one 188-byte packet at a time, mostly from the cache, and timing
+     * each of those would cost more than the reads themselves. */
+    if (!mr_source_timing_enabled()) return http_read_network(h, off, out, len);
+    started = clock();
+    ok = http_read_network(h, off, out, len);
+    mr_source_timing_add_network(
+        (unsigned long)((clock() - started) * 1000UL / CLOCKS_PER_SEC));
+    return ok;
 }
 
 static void platform_close(http_source *h)
@@ -1977,7 +1995,6 @@ mr_source *mr_http_source_open_ex(const char *url,
                               h->streaming ? MR_SOURCE_LEN_UNKNOWN : h->total_len,
                               http_read_at, http_close, h->url);
     mr_source_set_buffer_capacity(source, actual_cache);
-    mr_source_mark_network(source);
     return source;
 }
 
